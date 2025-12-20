@@ -91,6 +91,13 @@ function Controls(){
         <button className="btn ghost" onClick={()=>g.resetScores()}>Reset Scores</button>
       </div>
 
+      {/* Step 5: Quick link to open the Studio view in a new tab */}
+      <div className="row" style={{marginTop:10}}>
+        <button className="btn" onClick={()=>window.open("/studio","_blank")}>
+          Open Studio View (share this tab)
+        </button>
+      </div>
+
       <label>Game Title</label>
       <input value={title} onChange={e=>setTitle(e.target.value)} onBlur={()=>g.setTitle(title)} placeholder="K'mmunity Klash"/>
 
@@ -221,7 +228,7 @@ export default function App(){
       <div>
         <Board />
         <Buzzer />
-        <div className="footer">Tip: share this browser tab in Google Meet.</div>
+        <div className="footer">Tip: share the <b>Studio View</b> tab in Google Meet.</div>
       </div>
 
       <div>
