@@ -19,10 +19,20 @@ export default function Studio() {
 
   useEffect(() => {
     document.title = `${g.title} — Studio`;
-    document.documentElement.style.setProperty("--title-font", `"${g.titleFont}", var(--ui-font)`);
+    document.documentElement.style.setProperty(
+      "--title-font",
+      `"${g.titleFont}", var(--ui-font)`
+    );
   }, [g.title, g.titleFont]);
 
-  // Frame color (visual flourish)
+  // On first open, adopt latest snapshot (helps when Studio opens mid-round)
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem("kk_state");
+      if (raw) useGame.setState(JSON.parse(raw), false);
+    } catch {}
+  }, []);
+
   const total = g.teamA.score + g.teamB.score;
   let frame = "linear-gradient(90deg, var(--accent), var(--accent-2)) 1";
   if (total >= 500) frame = "conic-gradient(from 0deg, #a78bfa, #22d3ee, #f472b6, #a78bfa) 1";

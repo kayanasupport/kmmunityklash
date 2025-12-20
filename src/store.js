@@ -1,159 +1,186 @@
 import { create } from "zustand";
 
-/**
- * Cross-tab sync:
- * - We persist minimal state into localStorage under 'kk_state'
- * - We broadcast changes via BroadcastChannel('kk-game') so /studio mirrors host instantly
- */
-const channel = typeof window !== "undefined" && "BroadcastChannel" in window
-  ? new BroadcastChannel("kk-game")
-  : null;
-
+/** ---- Cross-tab sync helpers ---- */
+const BC_NAME = "kk-game";
 const STORAGE_KEY = "kk_state";
 
-function loadPersisted() {
+const channel =
+  typeof window !== "undefined" && "BroadcastChannel" in window
+    ? new BroadcastChannel(BC_NAME)
+    : null;
+
+const readPersist = () => {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     return raw ? JSON.parse(raw) : null;
-  } catch { return null; }
-}
+  } catch {
+    return null;
+  }
+};
 
-function persistAndBroadcast(state) {
+// Only the serializable, gameplay data (no functions)
+const snapshot = (s) => ({
+  title: s.title,
+  titleFont: s.titleFont,
+  sheetId: s.sheetId,
+  hostMode: s.hostMode,
+
+  round: s.round,
+  roundBank: s.roundBank,
+
+  teamA: s.teamA,
+  teamB: s.teamB,
+  buzzingTeam: s.buzzingTeam,
+});
+
+const persistAndBroadcast = (get) => {
+  const snap = snapshot(get());
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    if (channel) channel.postMessage(state);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(snap));
+    if (channel) channel.postMessage(snap);
   } catch {}
-}
+};
 
+/** ---- Default data ---- */
 const defaultState = {
   title: "K'mmunity Klash",
   titleFont: "Bangers",
-  sheetId: (typeof window !== "undefined" && new URLSearchParams(location.search).get("sheet")) ||
-           (typeof window !== "undefined" && localStorage.getItem("sheetId")) ||
-           "",
+  sheetId:
+    (typeof window !== "undefined" &&
+      new URLSearchParams(location.search).get("sheet")) ||
+    (typeof window !== "undefined" && localStorage.getItem("sheetId")) ||
+    "",
   hostMode: true,
 
-  round: { question: "", multiplier: 1, answers: [] },
+  round: { question: "", multiplier: 1, answers: [] }, // answers: [{text,points,revealed}]
   roundBank: 0,
 
   teamA: { name: "Team A", score: 0, strikes: 0 },
   teamB: { name: "Team B", score: 0, strikes: 0 },
-  buzzingTeam: "", // "A" | "B" | ""
-
-  // internal guard: prevents feedback loop when applying incoming broadcast
-  _applyExternal: false,
+  buzzingTeam: "",
 };
 
 export const useGame = create((set, get) => ({
   ...defaultState,
-  ...(loadPersisted() || {}),
+  ...(readPersist() || {}),
 
-  /** UI controls */
-  toggleHost: () => set((s) => ({ hostMode: !s.hostMode }), true),
-
+  /** UI toggles / metadata */
+  toggleHost: () => {
+    set((s) => ({ hostMode: !s.hostMode }));
+    persistAndBroadcast(get);
+  },
   setTitle: (title) => {
-    set({ title }, true);
-    persistAndBroadcast({ ...get(), title });
+    set({ title });
+    persistAndBroadcast(get);
   },
   setTitleFont: (titleFont) => {
-    set({ titleFont }, true);
-    persistAndBroadcast({ ...get(), titleFont });
+    set({ titleFont });
+    persistAndBroadcast(get);
   },
 
-  /** Load a round object {question, multiplier, answers[]} */
+  /** Round management */
   setRound: (round) => {
-    const r = {
-      question: round.question,
+    const next = {
+      question: String(round.question || ""),
       multiplier: Number(round.multiplier) || 1,
-      answers: (round.answers || []).map((a) => ({ ...a, revealed: false })),
+      answers: (round.answers || []).map((a) => ({
+        text: String(a.text || ""),
+        points: Number(a.points) || 0,
+        revealed: false,
+      })),
     };
-    set({ round: r, roundBank: 0, buzzingTeam: "" }, true);
-    persistAndBroadcast({ ...get(), round: r, roundBank: 0, buzzingTeam: "" });
+    set({ round: next, roundBank: 0, buzzingTeam: "" });
+    persistAndBroadcast(get);
   },
 
-  /** Reveal/hide answers */
+  /** Reveal / hide toggles automatically adjust bank */
   reveal: (index) => {
     const s = get();
+    const was = s.round.answers[index]?.revealed;
+    const pts = Number(s.round.answers[index]?.points || 0);
+
     const answers = s.round.answers.map((a, i) =>
       i === index ? { ...a, revealed: !a.revealed } : a
     );
-    const delta = answers[index].revealed ? s.round.answers[index].points : -s.round.answers[index].points;
-    const next = { ...s.round, answers };
-    set({ round: next, roundBank: Math.max(0, s.roundBank + delta) }, true);
-    persistAndBroadcast({ ...get(), round: next, roundBank: Math.max(0, s.roundBank + delta) });
+    const round = { ...s.round, answers };
+    const roundBank = Math.max(0, s.roundBank + (was ? -pts : pts));
+
+    set({ round, roundBank });
+    persistAndBroadcast(get);
   },
-  hide: (index) => get().reveal(index), // toggle
+  hide: (index) => get().reveal(index),
 
   /** Strikes */
   addStrike: (team) => {
     const key = team === "A" ? "teamA" : "teamB";
-    const t = { ...get()[key], strikes: Math.min(3, get()[key].strikes + 1) };
-    const next = { ...get(), [key]: t };
-    set(next, true);
-    persistAndBroadcast(next);
+    const t = get()[key];
+    const strikes = Math.min(3, (t?.strikes || 0) + 1);
+    set({ [key]: { ...t, strikes } });
+    persistAndBroadcast(get);
   },
   clearStrikes: () => {
-    const next = { ...get(), teamA: { ...get().teamA, strikes: 0 }, teamB: { ...get().teamB, strikes: 0 } };
-    set(next, true);
-    persistAndBroadcast(next);
+    set({
+      teamA: { ...get().teamA, strikes: 0 },
+      teamB: { ...get().teamB, strikes: 0 },
+    });
+    persistAndBroadcast(get);
   },
 
   /** Buzz */
   buzz: (team) => {
-    const next = { ...get(), buzzingTeam: team };
-    set(next, true);
-    persistAndBroadcast(next);
+    set({ buzzingTeam: team });
+    persistAndBroadcast(get);
   },
   resetBuzz: () => {
-    const next = { ...get(), buzzingTeam: "" };
-    set(next, true);
-    persistAndBroadcast(next);
+    set({ buzzingTeam: "" });
+    persistAndBroadcast(get);
   },
 
-  /** Award bank to winner */
+  /** Award bank to winner and reset bank/strikes */
   awardRound: (team) => {
     const s = get();
     const key = team === "A" ? "teamA" : "teamB";
     const gain = s.roundBank * (s.round?.multiplier || 1);
-    const t = { ...s[key], score: s[key].score + gain };
-    const next = { ...s, [key]: t, roundBank: 0, teamA: { ...s.teamA, strikes: 0 }, teamB: { ...s.teamB, strikes: 0 } };
-    set(next, true);
-    persistAndBroadcast(next);
+    set({
+      [key]: { ...s[key], score: s[key].score + gain },
+      roundBank: 0,
+      teamA: { ...s.teamA, strikes: 0 },
+      teamB: { ...s.teamB, strikes: 0 },
+    });
+    persistAndBroadcast(get);
   },
   resetScores: () => {
-    const next = {
-      ...get(),
+    set({
       teamA: { name: "Team A", score: 0, strikes: 0 },
       teamB: { name: "Team B", score: 0, strikes: 0 },
       roundBank: 0,
       buzzingTeam: "",
-    };
-    set(next, true);
-    persistAndBroadcast(next);
+    });
+    persistAndBroadcast(get);
   },
 
   updateTeam: (key, patch) => {
-    const next = { ...get(), [key]: { ...get()[key], ...patch } };
-    set(next, true);
-    persistAndBroadcast(next);
+    set({ [key]: { ...get()[key], ...patch } });
+    persistAndBroadcast(get);
   },
 }));
 
-/** Receive external updates from another tab */
+/** ---- Inbound syncs ---- */
+// BroadcastChannel
 if (channel) {
   channel.onmessage = (e) => {
-    try {
-      const incoming = e.data;
-      // apply selective fields
-      useGame.setState({ ...incoming, _applyExternal: true }, false);
-    } catch {}
+    const snap = e.data;
+    useGame.setState(snap, false);
   };
 }
+// storage event (covers Safari and when tabs re-open)
+if (typeof window !== "undefined") {
+  window.addEventListener("storage", (ev) => {
+    if (ev.key === STORAGE_KEY && ev.newValue) {
+      try {
+        useGame.setState(JSON.parse(ev.newValue), false);
+      } catch {}
+    }
+  });
+}
 
-/** Sync from localStorage on first load (e.g., if Studio opens later) */
-try {
-  const persisted = loadPersisted();
-  if (persisted) {
-    useGame.setState({ ...persisted, _applyExternal: true }, false);
-  }
-} catch {}
