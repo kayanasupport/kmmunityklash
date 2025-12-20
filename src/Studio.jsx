@@ -1,39 +1,40 @@
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import { useGame } from "./store";
 import cx from "clsx";
 
-function StrikeLights({ n=0 }) {
+function StrikeLights({ n = 0 }) {
   return (
     <div className="studio-strikes">
-      {[0,1,2].map(i => (
-        <div key={i} className={cx("studio-x", i < n && "on")}>X</div>
+      {[0, 1, 2].map((i) => (
+        <div key={i} className={cx("studio-x", i < n && "on")}>
+          X
+        </div>
       ))}
     </div>
   );
 }
 
-export default function Studio(){
+export default function Studio() {
   const g = useGame();
 
-  // dynamic doc title
-  useEffect(()=>{ document.title = `${g.title} — Studio`; },[g.title]);
+  useEffect(() => {
+    document.title = `${g.title} — Studio`;
+    document.documentElement.style.setProperty("--title-font", `"${g.titleFont}", var(--ui-font)`);
+  }, [g.title, g.titleFont]);
 
-  const frame =
-    g.teamA.score + g.teamB.score >= 500
-      ? "conic-gradient(from 0deg, #a78bfa, #22d3ee, #f472b6, #a78bfa)"
-      : g.teamA.score + g.teamB.score >= 300
-      ? "#d6b660"
-      : g.teamA.score + g.teamB.score >= 200
-      ? "#c0c0c0"
-      : g.teamA.score + g.teamB.score >= 100
-      ? "#cd7f32"
-      : "#2b3d7a";
+  // Frame color (visual flourish)
+  const total = g.teamA.score + g.teamB.score;
+  let frame = "linear-gradient(90deg, var(--accent), var(--accent-2)) 1";
+  if (total >= 500) frame = "conic-gradient(from 0deg, #a78bfa, #22d3ee, #f472b6, #a78bfa) 1";
+  else if (total >= 300) frame = "linear-gradient(90deg, #d6b660, #e3cc7a) 1";
+  else if (total >= 200) frame = "linear-gradient(90deg, #c0c0c0, #d8d8d8) 1";
+  else if (total >= 100) frame = "linear-gradient(90deg, #cd7f32, #e59f5b) 1";
 
   return (
     <div className="studio-wrap">
-      {/* stage lights */}
       <div className="studio-spot a" />
       <div className="studio-spot b" />
+
       <header className="studio-header">
         <div className="studio-logo">KK</div>
         <h1 className="studio-title">{g.title}</h1>
@@ -41,42 +42,42 @@ export default function Studio(){
       </header>
 
       <main className="studio-main">
-        {/* Answer Board */}
-        <section className="studio-board" style={{borderImage: typeof frame==="string" && frame.includes("conic") ? frame+" 1" : "linear-gradient(90deg, var(--accent), var(--accent-2)) 1"}}>
+        <section className="studio-board" style={{ borderImage: frame, borderImageSlice: 1 }}>
           <div className="studio-question">
-            {g.round?.question || "Waiting for host to load a round…"}
+            {g.round?.question || "Waiting for host to load a round..."}
           </div>
+
           <div className="studio-answers">
-            {(g.round?.answers || []).map((a,i)=>(
+            {(g.round?.answers || []).map((a, i) => (
               <div key={i} className={cx("studio-answer", a.revealed && "show")}>
-                <span className="num">{i+1}</span>
+                <span className="num">{i + 1}</span>
                 <span className="text">{a.revealed ? a.text : ""}</span>
                 <span className="pts">{a.revealed ? a.points : ""}</span>
               </div>
             ))}
           </div>
-          {g.buzzingTeam && (
-            <div className="studio-buzz">BUZZ! Team {g.buzzingTeam}</div>
-          )}
+
+          {g.buzzingTeam && <div className="studio-buzz">BUZZ! Team {g.buzzingTeam}</div>}
         </section>
 
-        {/* Podiums */}
         <section className="studio-podiums">
           <div className="pod">
             <div className="pod-name">{g.teamA.name}</div>
             <div className="pod-score">{g.teamA.score}</div>
-            <StrikeLights n={g.teamA.strikes}/>
+            <StrikeLights n={g.teamA.strikes} />
           </div>
+
           <div className="pod mid">
             <div className="bank">
               Bank <b>{g.roundBank}</b> × <b>{g.round?.multiplier || 1}</b> =
-              <span className="bank-total"> {g.roundBank*(g.round?.multiplier||1)}</span>
+              <span className="bank-total"> {g.roundBank * (g.round?.multiplier || 1)}</span>
             </div>
           </div>
+
           <div className="pod">
             <div className="pod-name">{g.teamB.name}</div>
             <div className="pod-score">{g.teamB.score}</div>
-            <StrikeLights n={g.teamB.strikes}/>
+            <StrikeLights n={g.teamB.strikes} />
           </div>
         </section>
       </main>
