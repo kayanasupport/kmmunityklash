@@ -1,48 +1,38 @@
 import { create } from "zustand";
 
-/** ---- Cross-tab sync helpers ---- */
-const BC_NAME = "kk-game";
+// ----- cross-tab plumbing -----
+const BC = typeof window !== "undefined" && "BroadcastChannel" in window
+  ? new BroadcastChannel("kk-game")
+  : null;
 const STORAGE_KEY = "kk_state";
 
-const channel =
-  typeof window !== "undefined" && "BroadcastChannel" in window
-    ? new BroadcastChannel(BC_NAME)
-    : null;
-
 const readPersist = () => {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
-  }
+  try { const raw = localStorage.getItem(STORAGE_KEY); return raw ? JSON.parse(raw) : null; }
+  catch { return null; }
 };
 
-// Only the serializable, gameplay data (no functions)
-const snapshot = (s) => ({
+const snap = (s) => ({
   title: s.title,
   titleFont: s.titleFont,
   sheetId: s.sheetId,
   hostMode: s.hostMode,
-
   round: s.round,
   roundBank: s.roundBank,
-
   teamA: s.teamA,
   teamB: s.teamB,
   buzzingTeam: s.buzzingTeam,
 });
 
 const persistAndBroadcast = (get) => {
-  const snap = snapshot(get());
+  const s = snap(get());
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(snap));
-    if (channel) channel.postMessage(snap);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+    if (BC) BC.postMessage(s);
   } catch {}
 };
 
-/** ---- Default data ---- */
-const defaultState = {
+// ----- defaults -----
+const defaults = {
   title: "K'mmunity Klash",
   titleFont: "Bangers",
   sheetId:
@@ -51,34 +41,23 @@ const defaultState = {
     (typeof window !== "undefined" && localStorage.getItem("sheetId")) ||
     "",
   hostMode: true,
-
-  round: { question: "", multiplier: 1, answers: [] }, // answers: [{text,points,revealed}]
+  round: { question: "", multiplier: 1, answers: [] },
   roundBank: 0,
-
   teamA: { name: "Team A", score: 0, strikes: 0 },
   teamB: { name: "Team B", score: 0, strikes: 0 },
   buzzingTeam: "",
 };
 
 export const useGame = create((set, get) => ({
-  ...defaultState,
+  ...defaults,
   ...(readPersist() || {}),
 
-  /** UI toggles / metadata */
-  toggleHost: () => {
-    set((s) => ({ hostMode: !s.hostMode }));
-    persistAndBroadcast(get);
-  },
-  setTitle: (title) => {
-    set({ title });
-    persistAndBroadcast(get);
-  },
-  setTitleFont: (titleFont) => {
-    set({ titleFont });
-    persistAndBroadcast(get);
-  },
+  // meta
+  toggleHost: () => { set((s) => ({ hostMode: !s.hostMode })); persistAndBroadcast(get); },
+  setTitle: (title) => { set({ title }); persistAndBroadcast(get); },
+  setTitleFont: (titleFont) => { set({ titleFont }); persistAndBroadcast(get); },
 
-  /** Round management */
+  // load round
   setRound: (round) => {
     const next = {
       question: String(round.question || ""),
@@ -93,28 +72,28 @@ export const useGame = create((set, get) => ({
     persistAndBroadcast(get);
   },
 
-  /** Reveal / hide toggles automatically adjust bank */
+  // reveal / hide (bank math is always numeric)
   reveal: (index) => {
     const s = get();
-    const was = s.round.answers[index]?.revealed;
-    const pts = Number(s.round.answers[index]?.points || 0);
+    const was = Boolean(s.round.answers[index]?.revealed);
+    const pts = Number(s.round.answers[index]?.points) || 0;
 
     const answers = s.round.answers.map((a, i) =>
       i === index ? { ...a, revealed: !a.revealed } : a
     );
     const round = { ...s.round, answers };
-    const roundBank = Math.max(0, s.roundBank + (was ? -pts : pts));
+    const roundBank = Math.max(0, (Number(s.roundBank) || 0) + (was ? -pts : pts));
 
     set({ round, roundBank });
     persistAndBroadcast(get);
   },
-  hide: (index) => get().reveal(index),
+  hide: (i) => get().reveal(i),
 
-  /** Strikes */
+  // strikes
   addStrike: (team) => {
     const key = team === "A" ? "teamA" : "teamB";
     const t = get()[key];
-    const strikes = Math.min(3, (t?.strikes || 0) + 1);
+    const strikes = Math.min(3, Number(t?.strikes || 0) + 1);
     set({ [key]: { ...t, strikes } });
     persistAndBroadcast(get);
   },
@@ -126,29 +105,30 @@ export const useGame = create((set, get) => ({
     persistAndBroadcast(get);
   },
 
-  /** Buzz */
-  buzz: (team) => {
-    set({ buzzingTeam: team });
-    persistAndBroadcast(get);
-  },
-  resetBuzz: () => {
-    set({ buzzingTeam: "" });
-    persistAndBroadcast(get);
-  },
+  // buzz
+  buzz: (team) => { set({ buzzingTeam: team }); persistAndBroadcast(get); },
+  resetBuzz: () => { set({ buzzingTeam: "" }); persistAndBroadcast(get); },
 
-  /** Award bank to winner and reset bank/strikes */
+  // award (FIX: purely numeric, broadcast after set)
   awardRound: (team) => {
     const s = get();
     const key = team === "A" ? "teamA" : "teamB";
-    const gain = s.roundBank * (s.round?.multiplier || 1);
+    const bank = Number(s.roundBank) || 0;
+    const mult = Number(s.round?.multiplier) || 1;
+    const gain = bank * mult;
+
+    const cur = s[key];
+    const nextTeam = { ...cur, score: (Number(cur.score) || 0) + gain };
     set({
-      [key]: { ...s[key], score: s[key].score + gain },
+      [key]: nextTeam,
       roundBank: 0,
+      buzzingTeam: "",
       teamA: { ...s.teamA, strikes: 0 },
       teamB: { ...s.teamB, strikes: 0 },
     });
     persistAndBroadcast(get);
   },
+
   resetScores: () => {
     set({
       teamA: { name: "Team A", score: 0, strikes: 0 },
@@ -165,22 +145,16 @@ export const useGame = create((set, get) => ({
   },
 }));
 
-/** ---- Inbound syncs ---- */
-// BroadcastChannel
-if (channel) {
-  channel.onmessage = (e) => {
-    const snap = e.data;
-    useGame.setState(snap, false);
+// inbound sync (BroadcastChannel + storage)
+if (BC) {
+  BC.onmessage = (e) => {
+    try { useGame.setState(e.data, false); } catch {}
   };
 }
-// storage event (covers Safari and when tabs re-open)
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (ev) => {
     if (ev.key === STORAGE_KEY && ev.newValue) {
-      try {
-        useGame.setState(JSON.parse(ev.newValue), false);
-      } catch {}
+      try { useGame.setState(JSON.parse(ev.newValue), false); } catch {}
     }
   });
 }
-
