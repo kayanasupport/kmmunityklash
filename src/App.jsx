@@ -219,6 +219,15 @@ function Controls() {
       </div>
 
       <div className="kk-panel">
+        <h3>Scores (Admin)</h3>
+        <div className="kk-actions-row wrap">
+          <button className="kk-btn" onClick={() => actions.resetScores()}>Reset Scores</button>
+          <button className="kk-btn" onClick={() => actions.transferAll("A", "B")}>Give A → B</button>
+          <button className="kk-btn" onClick={() => actions.transferAll("B", "A")}>Give B → A</button>
+        </div>
+      </div>
+
+      <div className="kk-panel">
         <h3>Keyboard (host)</h3>
         <ul className="kk-legend">
           <li>1–8: reveal/hide tiles</li>

@@ -45,19 +45,32 @@ export default function Studio() {
       .filter(({ a }) => (a?.text || "").trim().length > 0 && Number(a?.points || 0) > 0);
   }, [round]);
 
+  // Autoplay policy: require a one-time user gesture on Studio.
+  const [audioReady, setAudioReady] = useState(
+    () => localStorage.getItem("kk-audio-ready") === "1"
+  );
+  const primeAudio = async () => {
+    // Try prime each tag quickly; then pause
+    setAudioReady(true);
+    localStorage.setItem("kk-audio-ready", "1");
+    try {
+      await sfx.prime();
+    } catch {}
+  };
+
   // Play SFX on Studio when events arrive
   useEffect(() => {
-    if (!lastEvent?.id) return;
+    if (!audioReady || !lastEvent?.id) return;
     if (lastEvent.type === "reveal") {
       sfx.safePlay(() => sfx.reveal.play());
     } else if (lastEvent.type === "strike") {
       sfx.safePlay(() => sfx.strike.play());
     } else if (lastEvent.type === "buzz") {
       sfx.safePlay(() => sfx.buzz.play());
-    } else if (lastEvent.type === "award") {
+    } else if (lastEvent.type === "award" || lastEvent.type === "transfer" || lastEvent.type === "reset") {
       sfx.safePlay(() => sfx.award.play());
     }
-  }, [lastEvent?.id]);
+  }, [audioReady, lastEvent?.id]);
 
   const [flashId, setFlashId] = useState(null);
   useEffect(() => {
@@ -69,8 +82,14 @@ export default function Studio() {
   }, [strikeFlash?.id]);
 
   return (
-    <div className={`kk-studio ${font === "Bangers" ? "font-bangers" : ""}`}>
+    <div className={`kk-studio ${font === "Bangers" ? "font-bangers" : ""}`} onClick={() => { if (!audioReady) primeAudio(); }}>
       <div className="kk-studio-frame">
+        {!audioReady && (
+          <button className="kk-audio-primer" onClick={primeAudio}>
+            Enable Audio
+          </button>
+        )}
+
         <div className="kk-studio-header">
           <div className="kk-studio-title">{title || "K’mmunity Klash"}</div>
           <div className="kk-studio-scores">

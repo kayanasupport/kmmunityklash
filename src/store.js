@@ -28,8 +28,8 @@ const defaultState = {
   teamB: { score: 0, strikes: 0 },
   buzz: null,
   strikeFlash: null, // { team:'A'|'B', id:number }
-  // NEW: studio SFX driver (Studio listens to this and plays sounds)
-  lastEvent: null, // { type:'reveal'|'strike'|'buzz'|'award', id:number, meta?:any }
+  // Studio SFX driver (Studio plays sounds on these)
+  lastEvent: null, // { type:'reveal'|'strike'|'buzz'|'award'|'transfer'|'reset', id:number, meta?:any }
 };
 
 function loadState() {
@@ -205,6 +205,33 @@ export const actions = {
       bank: 0,
       bankEpoch: state.bankEpoch + 1, // start new epoch so old reveals don't add back
       lastEvent: { type: "award", id: Date.now(), meta: { team } },
+    };
+    persistAndBroadcast();
+  },
+  // NEW: reset both teams' scores to 0 (and bank/strikes/buzz)
+  resetScores() {
+    state = {
+      ...state,
+      teamA: { score: 0, strikes: 0 },
+      teamB: { score: 0, strikes: 0 },
+      bank: 0,
+      bankEpoch: state.bankEpoch + 1,
+      buzz: null,
+      lastEvent: { type: "reset", id: Date.now() },
+    };
+    persistAndBroadcast();
+  },
+  // NEW: transfer all points from one team to the other (A->B or B->A)
+  transferAll(from, to) {
+    const src = from === "A" ? "teamA" : "teamB";
+    const dst = to === "A" ? "teamA" : "teamB";
+    if (src === dst) return;
+    const amount = state[src].score || 0;
+    state = {
+      ...state,
+      [src]: { ...state[src], score: 0 },
+      [dst]: { ...state[dst], score: (state[dst].score || 0) + amount },
+      lastEvent: { type: "transfer", id: Date.now(), meta: { from, to } },
     };
     persistAndBroadcast();
   },
