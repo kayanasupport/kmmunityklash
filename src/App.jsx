@@ -1,22 +1,33 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useMemo } from "react";
 import { actions, useGame } from "./store";
 import sfx from "./sfx";
 import "./styles.css";
 import { fetchCsvText } from "./utils/sheet";
 
-function AnswerTile({ index, answer, revealed, onToggle }) {
+function AnswerTile({ visibleIndex, origIndex, answer, revealed, onToggle }) {
   const text = answer?.text ?? "";
   const pts = Number(answer?.points ?? 0);
   return (
     <button
       className={`kk-answer ${revealed ? "revealed" : ""}`}
-      onClick={() => onToggle(index)}
-      title={`Toggle #${index + 1} (${pts} pts)`}
+      onClick={() => onToggle(origIndex)}
+      title={`Toggle #${visibleIndex + 1} (${pts} pts)`}
     >
-      <div className="kk-answer-left">{index + 1}</div>
+      <div className="kk-answer-left">{visibleIndex + 1}</div>
       <div className="kk-answer-center">{revealed ? (text || "\u00A0") : "\u00A0"}</div>
       <div className="kk-answer-right">{revealed ? pts : "\u00A0"}</div>
     </button>
+  );
+}
+
+function StrikeXs({ count }) {
+  const c = Math.min(3, count || 0);
+  return (
+    <div className="kk-strikes">
+      {Array.from({ length: c }).map((_, i) => (
+        <span key={i} className="kk-strike-x">✖</span>
+      ))}
+    </div>
   );
 }
 
@@ -30,11 +41,7 @@ function ScoreBoard() {
       <div className={`kk-team kk-team-a ${buzz === "A" ? "buzzing" : ""}`}>
         <div className="kk-team-name">Team A</div>
         <div className="kk-team-score">{teamA?.score ?? 0}</div>
-        <div className="kk-strikes">
-          {Array.from({ length: Math.min(3, teamA?.strikes ?? 0) }).map((_, i) => (
-            <span key={i} className="kk-strike-dot" />
-          ))}
-        </div>
+        <StrikeXs count={teamA?.strikes ?? 0} />
       </div>
       <div className="kk-bank">
         <div className="kk-bank-label">Bank</div>
@@ -43,11 +50,7 @@ function ScoreBoard() {
       <div className={`kk-team kk-team-b ${buzz === "B" ? "buzzing" : ""}`}>
         <div className="kk-team-name">Team B</div>
         <div className="kk-team-score">{teamB?.score ?? 0}</div>
-        <div className="kk-strikes">
-          {Array.from({ length: Math.min(3, teamB?.strikes ?? 0) }).map((_, i) => (
-            <span key={i} className="kk-strike-dot" />
-          ))}
-        </div>
+        <StrikeXs count={teamB?.strikes ?? 0} />
       </div>
     </div>
   );
@@ -59,15 +62,19 @@ function RoundBoard() {
   const revealed = useGame((s) => s.revealed) || Array(8).fill(false);
   const round = (idx != null && rounds[idx]) ? rounds[idx] : null;
 
-  const answerList = Array.from({ length: 8 }).map((_, i) =>
-    round?.answers?.[i] ? round.answers[i] : { text: "", points: 0 }
-  );
+  // Only show answers that have text AND points > 0 (hide empty/zero rows)
+  const visible = useMemo(() => {
+    const ans = round?.answers || [];
+    return ans
+      .map((a, i) => ({ a, i }))
+      .filter(({ a }) => (a?.text || "").trim().length > 0 && Number(a?.points || 0) > 0);
+  }, [round]);
 
-  const toggle = (i) => {
-    if (revealed[i]) {
-      actions.hide(i);
+  const onToggle = (origIndex) => {
+    if (revealed[origIndex]) {
+      actions.hide(origIndex);
     } else {
-      actions.reveal(i);
+      actions.reveal(origIndex);
       sfx.safePlay(() => sfx.reveal.play());
     }
   };
@@ -78,8 +85,15 @@ function RoundBoard() {
         {round ? (round.question || "—") : "Load a CSV and pick a round"}
       </div>
       <div className="kk-answers-grid">
-        {answerList.map((ans, i) => (
-          <AnswerTile key={i} index={i} answer={ans} revealed={!!revealed[i]} onToggle={toggle} />
+        {visible.map(({ a, i }, visIdx) => (
+          <AnswerTile
+            key={i}
+            visibleIndex={visIdx}
+            origIndex={i}
+            answer={a}
+            revealed={!!revealed[i]}
+            onToggle={onToggle}
+          />
         ))}
       </div>
     </div>
@@ -168,7 +182,7 @@ function Controls() {
           >
             <option value="" disabled>Select a round</option>
             {rounds.map((r, i) => {
-              const q = (r?.question ?? "").slice(0, 60); // SAFE: never crashes
+              const q = (r?.question ?? "").slice(0, 60);
               const mult = r?.round ?? 1;
               return (
                 <option key={i} value={i}>{`#${i + 1} — x${mult} — ${q}`}</option>
@@ -225,6 +239,7 @@ function Controls() {
           >
             + Strike B
           </button>
+          <button className="kk-btn" onClick={() => actions.clearStrikes()} title="">Clear</button>
         </div>
         <div className="kk-actions-row">
           <button className="kk-btn buzz" onClick={() => { actions.buzz("A"); sfx.safePlay(() => sfx.buzz.play()); }} title="A">Buzz A</button>
@@ -234,7 +249,7 @@ function Controls() {
       </div>
 
       <div className="kk-panel">
-        <h3>Keyboard Legend</h3>
+        <h3>Keyboard (host)</h3>
         <ul className="kk-legend">
           <li>1–8: reveal/hide tiles</li>
           <li>A / B: buzz A / buzz B</li>
@@ -250,6 +265,8 @@ function Controls() {
 export default function App() {
   const font = useGame((s) => s.font) ?? "Bangers";
   const revealed = useGame((s) => s.revealed) ?? Array(8).fill(false);
+  const rounds = useGame((s) => s.rounds) ?? [];
+  const selectedRoundIndex = useGame((s) => s.selectedRoundIndex);
 
   // Keyboard handlers on Host only (this tab).
   useEffect(() => {
@@ -257,6 +274,10 @@ export default function App() {
       const k = e.key.toLowerCase();
       if (k >= "1" && k <= "8") {
         const idx = Number(k) - 1;
+        // Only reveal/hide if that answer exists (non-empty / non-zero)
+        const round = rounds[selectedRoundIndex] || null;
+        const ans = round?.answers?.[idx];
+        if (!ans || !(ans.text || "").trim() || !(Number(ans.points) > 0)) return;
         if (revealed[idx]) {
           actions.hide(idx);
         } else {
@@ -287,7 +308,7 @@ export default function App() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [revealed]);
+  }, [revealed, rounds, selectedRoundIndex]);
 
   return (
     <div className={`kk-app ${font === "Bangers" ? "font-bangers" : ""}`}>

@@ -11,7 +11,6 @@ try {
 }
 
 let listeners = new Set();
-
 let isApplyingRemote = false;
 
 const defaultState = {
@@ -21,10 +20,15 @@ const defaultState = {
   selectedRoundIndex: null,
   roundMultiplier: 1,
   revealed: Array(8).fill(false),
+  // Tracks when each tile was revealed (epoch counter), -1 = never (or prior epoch)
+  revealedEpochs: Array(8).fill(-1),
+  bankEpoch: 0,
   bank: 0,
   teamA: { score: 0, strikes: 0 },
   teamB: { score: 0, strikes: 0 },
   buzz: null,
+  // Used to flash a big X in Studio
+  strikeFlash: null, // { team: 'A'|'B', id: number }
 };
 
 function loadState() {
@@ -32,11 +36,11 @@ function loadState() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      // Ensure shape
       return {
         ...defaultState,
         ...parsed,
         revealed: Array.isArray(parsed?.revealed) ? parsed.revealed.slice(0, 8).concat(Array(8).fill(false)).slice(0, 8) : Array(8).fill(false),
+        revealedEpochs: Array.isArray(parsed?.revealedEpochs) ? parsed.revealedEpochs.slice(0, 8).concat(Array(8).fill(-1)).slice(0, 8) : Array(8).fill(-1),
       };
     }
   } catch {}
@@ -45,7 +49,7 @@ function loadState() {
 
 let state = loadState();
 
-function saveAndBroadcast() {
+function persistAndBroadcast() {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch {}
@@ -71,24 +75,6 @@ if (bc) {
   };
 }
 
-function computeBank(st) {
-  const idx = st.selectedRoundIndex;
-  if (idx == null) return 0;
-  const round = st.rounds[idx];
-  if (!round) return 0;
-  const sum = st.revealed.reduce((acc, r, i) => {
-    if (r) acc += Number(round.answers[i]?.points || 0);
-    return acc;
-  }, 0);
-  return sum * Number(st.roundMultiplier || 1);
-}
-
-function setState(patch) {
-  state = { ...state, ...patch };
-  state.bank = computeBank(state);
-  saveAndBroadcast();
-}
-
 export function useGame(selector) {
   return useSyncExternalStore(
     (l) => {
@@ -100,8 +86,154 @@ export function useGame(selector) {
   );
 }
 
+// Compute bank from tiles revealed in current bankEpoch only
+function computeBankFromEpoch(st) {
+  const idx = st.selectedRoundIndex;
+  if (idx == null) return 0;
+  const round = st.rounds[idx];
+  if (!round) return 0;
+  const m = Number(st.roundMultiplier || 1);
+  let sum = 0;
+  for (let i = 0; i < 8; i++) {
+    if (st.revealed[i] && st.revealedEpochs[i] === st.bankEpoch) {
+      sum += Number(round.answers?.[i]?.points || 0);
+    }
+  }
+  return sum * m;
+}
+
+function setState(patch) {
+  state = { ...state, ...patch };
+  persistAndBroadcast();
+}
+
+function resetForRoundChange(newIndex) {
+  setState({
+    selectedRoundIndex: newIndex,
+    roundMultiplier: state.rounds[newIndex]?.round || 1,
+    revealed: Array(8).fill(false),
+    revealedEpochs: Array(8).fill(-1),
+    bankEpoch: 0,
+    bank: 0,
+    teamA: { ...state.teamA, strikes: 0 },
+    teamB: { ...state.teamB, strikes: 0 },
+    buzz: null,
+    strikeFlash: null,
+  });
+}
+
+const SAMPLE_CSV = `round,question,a1,p1,a2,p2,a3,p3,a4,p4,a5,p5,a6,p6,a7,p7,a8,p8
+1,Name something you bring to a picnic,Food,38,Blanket,22,Drinks,18,Utensils,8,Napkins,6,Games,4,Ice,3,Music,1
+2,Name a household chore people avoid,Dishes,36,Laundry,24,Vacuum,14,Bathroom,12,Dusting,7,Windows,4,Trash,2,Yardwork,1
+3,Name something people check twice before travel,Passport,30,Tickets,22,Money,18,Phone,10,Charger,8,Luggage,6,Itinerary,4,Keys,2`;
+
+export const actions = {
+  loadCsv(text) {
+    let rounds = [];
+    try {
+      rounds = parseCsvTextInternal(text);
+    } catch (e) {
+      alert(e.message || "Failed to parse CSV");
+      return;
+    }
+    const selectedRoundIndex = rounds.length ? 0 : null;
+    const roundMultiplier = rounds[selectedRoundIndex]?.round || 1;
+    state = {
+      ...state,
+      rounds,
+      selectedRoundIndex,
+      roundMultiplier,
+      revealed: Array(8).fill(false),
+      revealedEpochs: Array(8).fill(-1),
+      bankEpoch: 0,
+      bank: 0,
+      teamA: { score: 0, strikes: 0 },
+      teamB: { score: 0, strikes: 0 },
+      buzz: null,
+      strikeFlash: null,
+    };
+    persistAndBroadcast();
+  },
+  loadSample() {
+    this.loadCsv(SAMPLE_CSV);
+  },
+  setSelectedRound(index) {
+    const idx = Number(index);
+    if (Number.isNaN(idx)) return;
+    resetForRoundChange(idx);
+  },
+  reveal(i) {
+    if (i < 0 || i > 7) return;
+    const arr = state.revealed.slice();
+    arr[i] = true;
+    const epochs = state.revealedEpochs.slice();
+    epochs[i] = state.bankEpoch; // mark as counted for current bank epoch
+    const next = { ...state, revealed: arr, revealedEpochs: epochs };
+    next.bank = computeBankFromEpoch(next);
+    state = next;
+    persistAndBroadcast();
+  },
+  hide(i) {
+    if (i < 0 || i > 7) return;
+    const arr = state.revealed.slice();
+    arr[i] = false;
+    const next = { ...state, revealed: arr };
+    next.bank = computeBankFromEpoch(next);
+    state = next;
+    persistAndBroadcast();
+  },
+  setRoundMultiplier(m) {
+    const next = { ...state, roundMultiplier: Number(m) || 1 };
+    next.bank = computeBankFromEpoch(next);
+    state = next;
+    persistAndBroadcast();
+  },
+  award(team) {
+    const t = team === "A" ? "teamA" : "teamB";
+    const score = (state[t].score || 0) + (state.bank || 0);
+    // Reset bank and advance epoch so current reveals are not auto-counted anymore
+    state = {
+      ...state,
+      [t]: { ...state[t], score },
+      bank: 0,
+      bankEpoch: state.bankEpoch + 1,
+      // keep revealed as-is for visuals; tiles revealed before do NOT count in the new epoch
+    };
+    persistAndBroadcast();
+  },
+  strike(team) {
+    const t = team === "A" ? "teamA" : "teamB";
+    const strikes = Math.min(3, (state[t].strikes || 0) + 1);
+    const flash = { team: team === "A" ? "A" : "B", id: Date.now() };
+    state = { ...state, [t]: { ...state[t], strikes }, strikeFlash: flash };
+    persistAndBroadcast();
+    // Auto-clear flash shortly so Studio hides the overlay
+    setTimeout(() => {
+      state = { ...state, strikeFlash: null };
+      persistAndBroadcast();
+    }, 900);
+  },
+  clearStrikes() {
+    setState({
+      teamA: { ...state.teamA, strikes: 0 },
+      teamB: { ...state.teamB, strikes: 0 },
+    });
+  },
+  buzz(team) {
+    setState({ buzz: team === "A" ? "A" : "B" });
+  },
+  resetBuzz() {
+    setState({ buzz: null });
+  },
+  setTitle(title) {
+    setState({ title });
+  },
+  setFont(font) {
+    setState({ font });
+  },
+};
+
 function parseCsvTextInternal(text) {
-  // Very simple CSV parser (assumes no quoted commas for game content)
   const lines = text
     .split(/\r?\n/)
     .map((l) => l.trim())
@@ -134,89 +266,5 @@ function parseCsvTextInternal(text) {
   });
   return rows;
 }
-
-const SAMPLE_CSV = `round,question,a1,p1,a2,p2,a3,p3,a4,p4,a5,p5,a6,p6,a7,p7,a8,p8
-1,Name something you bring to a picnic,Food,38,Blanket,22,Drinks,18,Utensils,8,Napkins,6,Games,4,Ice,3,Music,1
-2,Name a household chore people avoid,Dishes,36,Laundry,24,Vacuum,14,Bathroom,12,Dusting,7,Windows,4,Trash,2,Yardwork,1
-3,Name something people check twice before travel,Passport,30,Tickets,22,Money,18,Phone,10,Charger,8,Luggage,6,Itinerary,4,Keys,2`;
-
-export const actions = {
-  loadCsv(text) {
-    let rounds = [];
-    try {
-      rounds = parseCsvTextInternal(text);
-    } catch (e) {
-      alert(e.message || "Failed to parse CSV");
-      return;
-    }
-    const selectedRoundIndex = rounds.length ? 0 : null;
-    const roundMultiplier = rounds[selectedRoundIndex]?.round || 1;
-    setState({
-      rounds,
-      selectedRoundIndex,
-      roundMultiplier,
-      revealed: Array(8).fill(false),
-      bank: 0,
-      teamA: { score: 0, strikes: 0 },
-      teamB: { score: 0, strikes: 0 },
-      buzz: null,
-    });
-  },
-  loadSample() {
-    this.loadCsv(SAMPLE_CSV);
-  },
-  setSelectedRound(index) {
-    const idx = Number(index);
-    if (Number.isNaN(idx)) return;
-    setState({
-      selectedRoundIndex: idx,
-      roundMultiplier: state.rounds[idx]?.round || 1,
-      revealed: Array(8).fill(false),
-      bank: 0,
-      teamA: { ...state.teamA, strikes: 0 },
-      teamB: { ...state.teamB, strikes: 0 },
-      buzz: null,
-    });
-  },
-  reveal(i) {
-    const arr = state.revealed.slice();
-    arr[i] = true;
-    setState({ revealed: arr });
-  },
-  hide(i) {
-    const arr = state.revealed.slice();
-    arr[i] = false;
-    setState({ revealed: arr });
-  },
-  setRoundMultiplier(m) {
-    setState({ roundMultiplier: Number(m) || 1 });
-  },
-  award(team) {
-    const t = team === "A" ? "teamA" : "teamB";
-    const score = (state[t].score || 0) + (state.bank || 0);
-    const newTeam = { ...state[t], score };
-    setState({
-      [t]: newTeam,
-      bank: 0, // bank recomputed anyway, but ensure zeroed
-    });
-  },
-  strike(team) {
-    const t = team === "A" ? "teamA" : "teamB";
-    const strikes = Math.min(3, (state[t].strikes || 0) + 1);
-    setState({ [t]: { ...state[t], strikes } });
-  },
-  buzz(team) {
-    setState({ buzz: team === "A" ? "A" : "B" });
-  },
-  resetBuzz() {
-    setState({ buzz: null });
-  },
-  setTitle(title) {
-    setState({ title });
-  },
-  setFont(font) {
-    setState({ font });
-  },
-};
 
 export { parseCsvTextInternal as parseCsvText };

@@ -1,6 +1,3 @@
-// Centralized audio loader & safe play helpers
-// Only the Host should trigger sounds. Studio mirrors visuals via broadcast.
-
 function makeAudio(src) {
   const audio = new Audio(src);
   audio.preload = "auto";
@@ -14,20 +11,11 @@ const sounds = {
   award: makeAudio("/sfx/award.mp3"),
 };
 
-// safePlay(fn) runs a function that returns a Promise (e.g. audio.play()),
-// swallowing any autoplay/interrupt errors so we don't crash the UI.
 function safePlay(fn) {
   try {
     const res = fn && fn();
-    if (res && typeof res.then === "function") {
-      res.catch(() => {});
-    }
-  } catch {
-    // ignore
-  }
+    if (res && typeof res.then === "function") res.catch(() => {});
+  } catch {}
 }
 
-export default {
-  ...sounds,
-  safePlay,
-};
+export default { ...sounds, safePlay };
