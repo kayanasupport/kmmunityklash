@@ -1,54 +1,34 @@
-import Papa from "papaparse";
-
-/** Build round objects from raw row */
-function rowToRound(r) {
-  const answers = [];
-  for (let i = 1; i <= 8; i++) {
-    const t = r[`a${i}`];
-    const p = r[`p${i}`];
-    if (t !== undefined && t !== null && String(t).trim() !== "" && p !== undefined && p !== "") {
-      answers.push({
-        text: String(t).trim(),
-        points: Number(p),
-        revealed: false,
-      });
-    }
-  }
-  // round can be "1", 1, or even "x2" – normalize to 1/2/3
-  let mult = 1;
-  const raw = String(r.round ?? "").trim().toLowerCase();
-  if (raw.startsWith("x")) mult = Number(raw.slice(1)) || 1;
-  else mult = Number(raw) || 1;
-
-  return {
-    question: String(r.question || "").trim(),
-    multiplier: mult,
-    answers,
-  };
+export async function fetchCsvText(url) {
+  const res = await fetch(url, { cache: "no-store" });
+  if (!res.ok) throw new Error("Failed to fetch CSV");
+  return await res.text();
 }
 
-/** Parse CSV text to rounds (used by both Google Sheet + local upload) */
+// Exported for possible external uses; store has its own internal version too.
 export function parseCsvText(text) {
-  const { data } = Papa.parse(text, {
-    header: true,
-    skipEmptyLines: true,
-    transformHeader: (h) => String(h).trim().toLowerCase(),
+  const lines = text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0);
+
+  if (!lines.length) return [];
+
+  const header = lines[0].split(",").map((h) => h.trim());
+  const req = ["round","question","a1","p1","a2","p2","a3","p3","a4","p4","a5","p5","a6","p6","a7","p7","a8","p8"];
+  const ok = req.every((k) => header.includes(k));
+  if (!ok) throw new Error("CSV headers invalid");
+
+  const idx = Object.fromEntries(header.map((h, i) => [h, i]));
+  return lines.slice(1).map((line) => {
+    const cols = line.split(",").map((c) => c.trim());
+    const round = Number(cols[idx.round] || 1) || 1;
+    const question = cols[idx.question] || "";
+    const answers = [];
+    for (let n = 1; n <= 8; n++) {
+      const a = cols[idx["a" + n]] || "";
+      const p = Number(cols[idx["p" + n]] || 0) || 0;
+      answers.push({ text: a, points: p });
+    }
+    return { round, question, answers };
   });
-
-  return data
-    .filter((r) => r && r.question && String(r.question).trim().length)
-    .map(rowToRound);
-}
-
-/** Load from a published Google Sheet (File → Share → Publish to web → CSV) */
-export async function loadFromSheet(sheetId) {
-  if (!sheetId) return [];
-  const url = `https://docs.google.com/spreadsheets/d/${sheetId}/gviz/tq?tqx=out:csv`;
-  const text = await fetch(url).then((r) => r.text());
-  // If someone passed a URL instead of just the ID, try to extract the ID
-  if (text.startsWith("<")) {
-    // likely not published or permission issue
-    console.warn("Sheet appears not published to CSV. Check 'Publish to the web'.");
-  }
-  return parseCsvText(text);
 }

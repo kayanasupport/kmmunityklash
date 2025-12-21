@@ -1,235 +1,303 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { actions, subscribe, parseCsvText } from "./store";
-import { playReveal, playStrike, playBuzz, playAward } from "./sfx";
+import { actions, useGame } from "./store";
+import sfx from "./sfx";
+import "./styles.css";
+import { parseCsvText, fetchCsvText } from "./utils/sheet";
 
-export default function App() {
-  const [s, setS] = useState(null);
-  const [rounds, setRounds] = useState([]); // parsed from CSV
-  const [selected, setSelected] = useState(0);
+function AnswerTile({ index, answer, revealed, onToggle }) {
+  return (
+    <button
+      className={`kk-answer ${revealed ? "revealed" : ""}`}
+      onClick={() => onToggle(index)}
+      title={`Toggle #${index + 1} (${answer?.points ?? 0} pts)`}
+    >
+      <div className="kk-answer-left">{index + 1}</div>
+      <div className="kk-answer-center">
+        {revealed ? (answer?.text || "\u00A0") : "\u00A0"}
+      </div>
+      <div className="kk-answer-right">{revealed ? answer?.points ?? 0 : "\u00A0"}</div>
+    </button>
+  );
+}
 
-  useEffect(() => subscribe(setS), []);
+function ScoreBoard() {
+  const teamA = useGame((s) => s.teamA);
+  const teamB = useGame((s) => s.teamB);
+  const bank = useGame((s) => s.bank);
+  const buzz = useGame((s) => s.buzz);
+  return (
+    <div className="kk-scoreboard">
+      <div className={`kk-team kk-team-a ${buzz === "A" ? "buzzing" : ""}`}>
+        <div className="kk-team-name">Team A</div>
+        <div className="kk-team-score">{teamA.score}</div>
+        <div className="kk-strikes">{Array.from({ length: teamA.strikes }).map((_, i) => <span key={i} className="kk-strike-dot" />)}</div>
+      </div>
+      <div className="kk-bank">
+        <div className="kk-bank-label">Bank</div>
+        <div className="kk-bank-score">{bank}</div>
+      </div>
+      <div className={`kk-team kk-team-b ${buzz === "B" ? "buzzing" : ""}`}>
+        <div className="kk-team-name">Team B</div>
+        <div className="kk-team-score">{teamB.score}</div>
+        <div className="kk-strikes">{Array.from({ length: teamB.strikes }).map((_, i) => <span key={i} className="kk-strike-dot" />)}</div>
+      </div>
+    </div>
+  );
+}
 
-  const selectedRound = rounds[selected];
+function RoundBoard() {
+  const rounds = useGame((s) => s.rounds);
+  const idx = useGame((s) => s.selectedRoundIndex);
+  const revealed = useGame((s) => s.revealed);
+  const round = rounds[idx] || null;
 
-  function handleCsvUpload(e) {
+  const answerList = Array.from({ length: 8 }).map((_, i) => round?.answers?.[i] || { text: "", points: 0 });
+
+  const toggle = (i) => {
+    if (revealed[i]) {
+      actions.hide(i);
+    } else {
+      actions.reveal(i);
+    }
+  };
+
+  return (
+    <div className="kk-round-board">
+      <div className="kk-question" title={round?.question || ""}>
+        {round ? round.question : "Load a CSV and pick a round"}
+      </div>
+      <div className="kk-answers-grid">
+        {answerList.map((ans, i) => (
+          <AnswerTile key={i} index={i} answer={ans} revealed={revealed[i]} onToggle={toggle} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Controls() {
+  const [url, setUrl] = useState("");
+  const fileRef = useRef(null);
+  const title = useGame((s) => s.title);
+  const font = useGame((s) => s.font);
+  const rounds = useGame((s) => s.rounds);
+  const selectedRoundIndex = useGame((s) => s.selectedRoundIndex);
+  const roundMultiplier = useGame((s) => s.roundMultiplier);
+
+  const onFile = async (e) => {
     const f = e.target.files?.[0];
     if (!f) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      const text = String(reader.result || "");
-      const parsed = parseCsvText(text);
-      setRounds(parsed);
-      if (parsed[0]) {
-        actions.loadRound(parsed[0].question, parsed[0].answers);
-        setSelected(0);
-      }
-      alert("Rounds loaded from CSV");
-    };
-    reader.readAsText(f);
-  }
+    const text = await f.text();
+    actions.loadCsv(text);
+  };
 
-  function loadSelected() {
-    if (!selectedRound) return;
-    actions.loadRound(selectedRound.question, selectedRound.answers);
-  }
-
-  const answersCount = useMemo(() => s?.answers?.length || 0, [s]);
-
-  if (!s) return null;
+  const onFetchUrl = async () => {
+    if (!url.trim()) return;
+    try {
+      const csv = await fetchCsvText(url.trim());
+      actions.loadCsv(csv);
+    } catch (e) {
+      alert("Failed to load CSV from URL. Make sure it's a direct CSV link (e.g. Google Sheet 'Publish to web' as CSV).");
+    }
+  };
 
   return (
-    <div className={`app font-${s.font}`}>
-      <header className="brand">
-        <div className="logo-circle">KK</div>
-        <h1>K'mmunity Klash</h1>
-      </header>
-
-      <section className="board">
-        <div className="round-chip">Round Multiplier: ×{s.roundMultiplier}</div>
-        <div className="answers-chip">Answers: {answersCount}</div>
-
-        <div className="question">{s.question || "Load a round..."}</div>
-
-        <div className="answers-grid">
-          {s.answers.map((a, i) => (
-            <button
-              key={i}
-              className={`answer-card ${a.shown ? "shown" : ""}`}
-              onClick={() => {
-                if (a.shown) {
-                  actions.hide(i);
-                } else {
-                  actions.reveal(i);
-                  playReveal();
-                }
-              }}
-            >
-              <span className="index">{i + 1}</span>
-              <span className="text">{a.shown ? a.text : "— — — —"}</span>
-              <span className="pts">{a.shown ? a.points : "?"}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="scores">
-          <TeamCard label={s.teams.A.name} value={s.teams.A.score} strikes={s.teams.A.strikes} />
-          <div className="bank">
-            <div className="bank-label">Bank</div>
-            <div className="bank-value">{s.bank}</div>
-          </div>
-          <TeamCard label={s.teams.B.name} value={s.teams.B.score} strikes={s.teams.B.strikes} />
-        </div>
-      </section>
-
-      <aside className="panel">
-        <div className="panel-row">
-          <button onClick={() => { actions.resetAll(); }}>Reset Scores</button>
-          <button onClick={() => window.open("/studio", "_blank")}>
-            Open Studio View (share this tab)
-          </button>
-        </div>
-
-        <div className="panel-group">
-          <label>Game Title</label>
+    <div className="kk-controls">
+      <div className="kk-panel">
+        <h3>Game Setup</h3>
+        <div className="kk-field">
+          <label>Title</label>
           <input
-            value={s.title}
+            className="kk-input"
+            value={title}
             onChange={(e) => actions.setTitle(e.target.value)}
-            placeholder="Game Title"
+            placeholder="K’mmunity Klash"
           />
         </div>
-
-        <div className="panel-group">
-          <label>Title Font</label>
-          <select value={s.font} onChange={(e) => actions.setFont(e.target.value)}>
-            <option value="bangers">Bangers (bold comic)</option>
-            <option value="inter">Inter (clean)</option>
-          </select>
-        </div>
-
-        <div className="panel-row">
-          <label>Round Multiplier</label>
+        <div className="kk-field">
+          <label>Font</label>
           <select
-            value={s.roundMultiplier}
-            onChange={(e) => actions.setMultiplier(Number(e.target.value))}
+            className="kk-select"
+            value={font}
+            onChange={(e) => actions.setFont(e.target.value)}
           >
-            <option value={1}>×1</option>
-            <option value={2}>×2</option>
-            <option value={3}>×3</option>
-            <option value={4}>×4</option>
+            <option value="Bangers">Bangers (titles)</option>
+            <option value="system-ui">System UI</option>
           </select>
         </div>
-
-        <div className="panel-group">
-          <label>Upload a CSV (same headers)</label>
-          <input type="file" accept=".csv" onChange={handleCsvUpload} />
-          <button onClick={() => {
-            const sample = `round,question,a1,p1,a2,p2,a3,p3,a4,p4,a5,p5
-1,Name something people do before a big meeting,Prepare slides,35,Get coffee,25,Practice,20,Check notes,10,Review agenda,5`;
-            const parsed = parseCsvText(sample);
-            setRounds(parsed);
-            actions.loadRound(parsed[0].question, parsed[0].answers);
-            alert("Sample round loaded");
-          }}>Load Sample Round</button>
-        </div>
-
-        <div className="panel-group">
-          <label>Load Selected Round</label>
-          <div className="row">
-            <select
-              value={selected}
-              onChange={(e) => setSelected(Number(e.target.value))}
-            >
-              {rounds.map((r, i) => (
-                <option key={i} value={i}>
-                  #{i + 1} • ×{s.roundMultiplier} • {r.question.slice(0, 24)}
-                </option>
-              ))}
-            </select>
-            <button onClick={loadSelected}>Load Selected</button>
+        <div className="kk-field">
+          <label>CSV Upload</label>
+          <div className="kk-file-row">
+            <input ref={fileRef} type="file" accept=".csv,text/csv" onChange={onFile} />
+            <button className="kk-btn" onClick={() => fileRef.current?.click()}>Choose CSV</button>
+            <button className="kk-btn" onClick={actions.loadSample}>Load Sample</button>
           </div>
         </div>
+        <div className="kk-field">
+          <label>CSV URL</label>
+          <div className="kk-url-row">
+            <input className="kk-input" placeholder="https://...csv" value={url} onChange={(e) => setUrl(e.target.value)} />
+            <button className="kk-btn" onClick={onFetchUrl}>Fetch</button>
+          </div>
+          <div className="kk-help">Google Sheets: File → Share → Publish to web → CSV</div>
+        </div>
+      </div>
 
-        <div className="panel-group">
-          <label>Award Bank</label>
-          <div className="row">
-            <button onClick={() => { actions.award("A"); playAward(); }}>Award to Team A</button>
-            <button onClick={() => { actions.award("B"); playAward(); }}>Award to Team B</button>
+      <div className="kk-panel">
+        <h3>Round & Multiplier</h3>
+        <div className="kk-field">
+          <label>Round</label>
+          <select
+            className="kk-select"
+            value={selectedRoundIndex ?? ""}
+            onChange={(e) => actions.setSelectedRound(Number(e.target.value))}
+          >
+            <option value="" disabled>Select a round</option>
+            {rounds.map((r, i) => (
+              <option key={i} value={i}>{`#${i + 1} — x${r.round} — ${r.question.slice(0, 60)}`}</option>
+            ))}
+          </select>
+        </div>
+        <div className="kk-field">
+          <label>Multiplier</label>
+          <div className="kk-pillset">
+            {[1, 2, 3].map((m) => (
+              <button
+                key={m}
+                className={`kk-pill ${m === roundMultiplier ? "active" : ""}`}
+                onClick={() => actions.setRoundMultiplier(m)}
+              >
+                x{m}
+              </button>
+            ))}
           </div>
         </div>
+      </div>
 
-        <div className="panel-group">
-          <label>Strikes</label>
-          <div className="row">
-            <button onClick={() => { actions.strike("A"); playStrike(); }}>+ Strike A</button>
-            <button onClick={() => { actions.strike("B"); playStrike(); }}>+ Strike B</button>
-            <button onClick={() => actions.clearStrikes()}>Clear</button>
-          </div>
+      <div className="kk-panel">
+        <h3>Award / Buzz / Strikes</h3>
+        <div className="kk-actions-row">
+          <button
+            className="kk-btn primary"
+            onClick={() => { actions.award("A"); sfx.safePlay(() => sfx.award.play()); }}
+            title="W"
+          >
+            Award → Team A
+          </button>
+          <button
+            className="kk-btn primary"
+            onClick={() => { actions.award("B"); sfx.safePlay(() => sfx.award.play()); }}
+            title="E"
+          >
+            Award → Team B
+          </button>
         </div>
-
-        <div className="panel-group">
-          <label>Buzzer</label>
-          <div className="row">
-            <button onClick={() => { actions.buzz("A"); playBuzz(); }}>Buzz Team A</button>
-            <button onClick={() => actions.resetBuzz()}>Reset</button>
-            <button onClick={() => { actions.buzz("B"); playBuzz(); }}>Buzz Team B</button>
-          </div>
+        <div className="kk-actions-row">
+          <button
+            className="kk-btn warn"
+            onClick={() => { actions.strike("A"); sfx.safePlay(() => sfx.strike.play()); }}
+            title="S"
+          >
+            + Strike A
+          </button>
+          <button
+            className="kk-btn warn"
+            onClick={() => { actions.strike("B"); sfx.safePlay(() => sfx.strike.play()); }}
+            title="D"
+          >
+            + Strike B
+          </button>
         </div>
-
-        <div className="kbd-hints">
-          <strong>Keyboard (host):</strong><br/>
-          1–8 = reveal/hide answer • A/B = buzz team • R = reset buzz<br/>
-          S = +strike (A), D = +strike (B) • W/E = award A/B
+        <div className="kk-actions-row">
+          <button
+            className="kk-btn buzz"
+            onClick={() => { actions.buzz("A"); sfx.safePlay(() => sfx.buzz.play()); }}
+            title="A"
+          >
+            Buzz A
+          </button>
+          <button
+            className="kk-btn buzz"
+            onClick={() => { actions.buzz("B"); sfx.safePlay(() => sfx.buzz.play()); }}
+            title="B"
+          >
+            Buzz B
+          </button>
+          <button className="kk-btn" onClick={() => actions.resetBuzz()} title="R">Reset Buzz</button>
         </div>
-      </aside>
+      </div>
 
-      <Kbd />
+      <div className="kk-panel">
+        <h3>Keyboard Legend</h3>
+        <ul className="kk-legend">
+          <li>1–8: reveal/hide tiles</li>
+          <li>A / B: buzz A / buzz B</li>
+          <li>R: reset buzz</li>
+          <li>S / D: +strike Team A / Team B</li>
+          <li>W / E: award bank to Team A / Team B</li>
+        </ul>
+      </div>
     </div>
   );
 }
 
-function TeamCard({ label, value, strikes }) {
-  const xs = new Array(3).fill(0).map((_, i) => (
-    <span key={i} className={`x ${i < strikes ? "on" : ""}`}>x</span>
-  ));
-  return (
-    <div className="team">
-      <div className="label">{label}</div>
-      <div className="value">{value}</div>
-      <div className="xs">{xs}</div>
-    </div>
-  );
-}
+export default function App() {
+  const font = useGame((s) => s.font);
+  const revealed = useGame((s) => s.revealed);
 
-function Kbd() {
-  // Hotkeys for host
+  // Keyboard handlers on Host only (this tab).
   useEffect(() => {
     const onKey = (e) => {
       const k = e.key.toLowerCase();
       if (k >= "1" && k <= "8") {
-        const i = Number(k) - 1;
-        // toggle reveal
-        actions.reveal(i); // reveal first…
-        // if it was already shown, toggling will hide:
-        // we call hide if already revealed by reading local
-        // (safe enough, because reveal() ignores already-shown)
+        const idx = Number(k) - 1;
+        if (revealed[idx]) {
+          actions.hide(idx);
+        } else {
+          actions.reveal(idx);
+          sfx.safePlay(() => sfx.reveal.play());
+        }
       } else if (k === "a") {
         actions.buzz("A");
+        sfx.safePlay(() => sfx.buzz.play());
       } else if (k === "b") {
         actions.buzz("B");
+        sfx.safePlay(() => sfx.buzz.play());
       } else if (k === "r") {
         actions.resetBuzz();
       } else if (k === "s") {
         actions.strike("A");
+        sfx.safePlay(() => sfx.strike.play());
       } else if (k === "d") {
         actions.strike("B");
+        sfx.safePlay(() => sfx.strike.play());
       } else if (k === "w") {
         actions.award("A");
+        sfx.safePlay(() => sfx.award.play());
       } else if (k === "e") {
         actions.award("B");
+        sfx.safePlay(() => sfx.award.play());
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
-  return null;
+  }, [revealed]);
+
+  return (
+    <div className={`kk-app ${font === "Bangers" ? "font-bangers" : ""}`}>
+      <header className="kk-header">
+        <div className="kk-title">K’mmunity Klash</div>
+        <div className="kk-subtitle">Host Console</div>
+      </header>
+      <main className="kk-main">
+        <div className="kk-left">
+          <ScoreBoard />
+          <RoundBoard />
+        </div>
+        <div className="kk-right">
+          <Controls />
+        </div>
+      </main>
+    </div>
+  );
 }
