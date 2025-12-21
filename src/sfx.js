@@ -5,22 +5,26 @@ function makeAudio(src) {
   return audio;
 }
 
-const buzz = makeAudio("/sfx/buzz.mp3");
+const buzz   = makeAudio("/sfx/buzz.mp3");
 const strike = makeAudio("/sfx/strike.mp3");
 const reveal = makeAudio("/sfx/reveal.mp3");
 const award  = makeAudio("/sfx/award.mp3");
 
+// One-time primer to satisfy autoplay policies.
 async function prime() {
   try {
     await reveal.play(); reveal.pause(); reveal.currentTime = 0;
     await strike.play(); strike.pause(); strike.currentTime = 0;
     await buzz.play();   buzz.pause();   buzz.currentTime = 0;
     await award.play();  award.pause();  award.currentTime = 0;
-  } catch {}
+  } catch {} // silently ignore; user can click again if needed
 }
 
 function safePlay(fn) {
-  try { const res = fn && fn(); if (res && typeof res.then === "function") res.catch(() => {}); } catch {}
+  try {
+    const res = fn && fn();
+    if (res && typeof res.then === "function") res.catch(() => {});
+  } catch {}
 }
 
 export default { buzz, strike, reveal, award, prime, safePlay };

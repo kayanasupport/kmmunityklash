@@ -20,13 +20,13 @@ const defaultState = {
   revealed: Array(8).fill(false),
   revealedEpochs: Array(8).fill(-1),
   bankEpoch: 0,
-  bankOpen: true, // NEW: only count reveals while open
+  bankOpen: true,
   bank: 0,
   teamA: { score: 0, strikes: 0 },
   teamB: { score: 0, strikes: 0 },
   buzz: null,
   strikeFlash: null,
-  lastEvent: null, // still persisted for resilience
+  lastEvent: null, // persisted fallback for SFX
 };
 
 function loadState() {
@@ -60,7 +60,6 @@ function postState() {
 }
 
 function postEvent(evt) {
-  // evt: { type, id, meta }
   if (eventBc) {
     try { eventBc.postMessage(evt); } catch {}
   }
@@ -102,10 +101,7 @@ function computeBank(st) {
   return sum * m;
 }
 
-function setState(patch) {
-  state = { ...state, ...patch };
-  postState();
-}
+function setState(patch) { state = { ...state, ...patch }; postState(); }
 
 function resetForRoundChange(newIndex) {
   state = {
@@ -136,10 +132,8 @@ export const actions = {
     let rounds = [];
     try { rounds = parseCsvTextInternal(text); }
     catch (e) { alert(e.message || "Failed to parse CSV"); return; }
-
     const selectedRoundIndex = rounds.length ? 0 : null;
     const roundMultiplier = rounds[selectedRoundIndex]?.round || 1;
-
     state = {
       ...state,
       rounds,
@@ -169,16 +163,13 @@ export const actions = {
     const revealed = state.revealed.slice();
     const epochs = state.revealedEpochs.slice();
     revealed[i] = true;
-    // only mark as countable if bank is open
     epochs[i] = state.bankOpen ? state.bankEpoch : -1;
-
     const next = { ...state, revealed, revealedEpochs: epochs };
     next.bank = computeBank(next);
     const evt = { type: "reveal", id: Date.now(), meta: { i } };
     next.lastEvent = evt;
     state = next;
-    postState();
-    postEvent(evt);
+    postState(); postEvent(evt);
   },
   hide(i) {
     if (i < 0 || i > 7) return;
@@ -205,14 +196,13 @@ export const actions = {
       ...state,
       [t]: { ...state[t], score },
       bank: 0,
-      bankOpen: false,      // freeze further counting
+      bankOpen: false,
       bankEpoch: state.bankEpoch + 1,
       lastEvent: evt,
     };
     postState(); postEvent(evt);
   },
 
-  // NEW: explicitly freeze bank for reveal-only demo of remaining answers
   endRound() {
     const evt = { type: "award", id: Date.now(), meta: { team: null } };
     state = {
@@ -283,7 +273,7 @@ export const actions = {
   },
 
   setTitle(title) { setState({ title }); },
-  setFont(font) { setState({ font }); },
+  setFont(font)   { setState({ font }); },
 };
 
 function parseCsvTextInternal(text) {

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useGame } from "./store";
 import sfx from "./sfx";
 import "./styles.css";
@@ -36,7 +36,9 @@ export default function Studio() {
   const bank = useGame((s) => s.bank);
   const buzz = useGame((s) => s.buzz);
   const strikeFlash = useGame((s) => s.strikeFlash);
+  const lastEvent = useGame((s) => s.lastEvent); // fallback trigger
 
+  // filter visible
   const visible = useMemo(() => {
     const ans = round?.answers || [];
     return ans.map((a, i) => ({ a, i }))
@@ -51,7 +53,7 @@ export default function Studio() {
     try { await sfx.prime(); } catch {}
   }
 
-  // Fast path: listen to instantaneous event channel for SFX
+  // FAST PATH — dedicated event channel
   useEffect(() => {
     const bc = new BroadcastChannel("kk-evt");
     bc.onmessage = (ev) => {
@@ -65,6 +67,18 @@ export default function Studio() {
     return () => bc.close();
   }, [audioReady]);
 
+  // FALLBACK — also react to persisted state events (de-duped)
+  const lastPlayedId = useRef(null);
+  useEffect(() => {
+    if (!audioReady || !lastEvent?.id || lastEvent.id === lastPlayedId.current) return;
+    lastPlayedId.current = lastEvent.id;
+    const type = lastEvent.type;
+    if (type === "reveal") sfx.safePlay(() => sfx.reveal.play());
+    else if (type === "strike") sfx.safePlay(() => sfx.strike.play());
+    else if (type === "buzz") sfx.safePlay(() => sfx.buzz.play());
+    else if (type === "award" || type === "transfer" || type === "reset") sfx.safePlay(() => sfx.award.play());
+  }, [audioReady, lastEvent?.id]);
+
   // Strike big X overlay
   const [flashId, setFlashId] = useState(null);
   useEffect(() => {
@@ -76,11 +90,27 @@ export default function Studio() {
   }, [strikeFlash?.id]);
 
   return (
-    <div className={`kk-studio ${font === "Bangers" ? "font-bangers" : ""}`} onClick={() => { if (!audioReady) primeAudio(); }}>
+    <div
+      className={`kk-studio ${font === "Bangers" ? "font-bangers" : ""}`}
+      onClick={() => { if (!audioReady) primeAudio(); }}
+    >
       <div className="kk-studio-frame">
         {!audioReady && (
           <button className="kk-audio-primer" onClick={primeAudio}>Enable Audio</button>
         )}
+
+        {/* tiny status chip so you know audio is armed */}
+        <div
+          style={{
+            position: "absolute", right: 16, bottom: 16, padding: "6px 10px",
+            borderRadius: 999, fontWeight: 900, fontSize: 12,
+            background: audioReady ? "rgba(129, 199, 132, 0.9)" : "rgba(255, 183, 77, 0.9)",
+            color: "#021", border: "2px solid #f6c33d"
+          }}
+          title="Audio status"
+        >
+          {audioReady ? "Sound: Enabled" : "Sound: Click to enable"}
+        </div>
 
         <div className="kk-studio-header">
           <div className="kk-studio-title">{title || "K’mmunity Klash"}</div>
