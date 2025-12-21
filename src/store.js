@@ -1,9 +1,10 @@
 import { create } from "zustand";
 
-// ----- cross-tab plumbing -----
-const BC = typeof window !== "undefined" && "BroadcastChannel" in window
-  ? new BroadcastChannel("kk-game")
-  : null;
+/* ---------- Cross-tab sync ---------- */
+const BC =
+  typeof window !== "undefined" && "BroadcastChannel" in window
+    ? new BroadcastChannel("kk-game")
+    : null;
 const STORAGE_KEY = "kk_state";
 
 const readPersist = () => {
@@ -11,18 +12,18 @@ const readPersist = () => {
   catch { return null; }
 };
 
+// Only serialize gameplay primitives (no functions)
 const snap = (s) => ({
   title: s.title,
   titleFont: s.titleFont,
   sheetId: s.sheetId,
   hostMode: s.hostMode,
-  round: s.round,
-  roundBank: s.roundBank,
-  teamA: s.teamA,
+  round: s.round,         // {question, multiplier, answers[{text,points,revealed}]}
+  roundBank: s.roundBank, // numeric
+  teamA: s.teamA,         // {name, score, strikes}
   teamB: s.teamB,
-  buzzingTeam: s.buzzingTeam,
+  buzzingTeam: s.buzzingTeam
 });
-
 const persistAndBroadcast = (get) => {
   const s = snap(get());
   try {
@@ -31,7 +32,11 @@ const persistAndBroadcast = (get) => {
   } catch {}
 };
 
-// ----- defaults -----
+/* ---------- Helpers ---------- */
+const sumRevealed = (answers=[]) =>
+  answers.reduce((t,a)=>t + (a?.revealed ? (Number(a.points)||0) : 0), 0);
+
+/* ---------- Defaults ---------- */
 const defaults = {
   title: "K'mmunity Klash",
   titleFont: "Bangers",
@@ -41,8 +46,10 @@ const defaults = {
     (typeof window !== "undefined" && localStorage.getItem("sheetId")) ||
     "",
   hostMode: true,
+
   round: { question: "", multiplier: 1, answers: [] },
   roundBank: 0,
+
   teamA: { name: "Team A", score: 0, strikes: 0 },
   teamB: { name: "Team B", score: 0, strikes: 0 },
   buzzingTeam: "",
@@ -52,17 +59,17 @@ export const useGame = create((set, get) => ({
   ...defaults,
   ...(readPersist() || {}),
 
-  // meta
-  toggleHost: () => { set((s) => ({ hostMode: !s.hostMode })); persistAndBroadcast(get); },
+  /* ----- Meta ----- */
+  toggleHost: () => { set((s)=>({hostMode:!s.hostMode})); persistAndBroadcast(get); },
   setTitle: (title) => { set({ title }); persistAndBroadcast(get); },
   setTitleFont: (titleFont) => { set({ titleFont }); persistAndBroadcast(get); },
 
-  // load round
+  /* ----- Round management ----- */
   setRound: (round) => {
     const next = {
       question: String(round.question || ""),
       multiplier: Number(round.multiplier) || 1,
-      answers: (round.answers || []).map((a) => ({
+      answers: (round.answers || []).map((a)=>({
         text: String(a.text || ""),
         points: Number(a.points) || 0,
         revealed: false,
@@ -72,28 +79,24 @@ export const useGame = create((set, get) => ({
     persistAndBroadcast(get);
   },
 
-  // reveal / hide (bank math is always numeric)
+  /* ----- Reveal / hide (Bank is recomputed from revealed answers) ----- */
   reveal: (index) => {
     const s = get();
-    const was = Boolean(s.round.answers[index]?.revealed);
-    const pts = Number(s.round.answers[index]?.points) || 0;
-
-    const answers = s.round.answers.map((a, i) =>
-      i === index ? { ...a, revealed: !a.revealed } : a
+    const answers = s.round.answers.map((a,i)=>
+      i===index ? { ...a, revealed: !a.revealed } : a
     );
     const round = { ...s.round, answers };
-    const roundBank = Math.max(0, (Number(s.roundBank) || 0) + (was ? -pts : pts));
-
+    const roundBank = sumRevealed(answers);
     set({ round, roundBank });
     persistAndBroadcast(get);
   },
-  hide: (i) => get().reveal(i),
+  hide: (i)=>get().reveal(i),
 
-  // strikes
+  /* ----- Strikes ----- */
   addStrike: (team) => {
     const key = team === "A" ? "teamA" : "teamB";
     const t = get()[key];
-    const strikes = Math.min(3, Number(t?.strikes || 0) + 1);
+    const strikes = Math.min(3, Number(t?.strikes||0) + 1);
     set({ [key]: { ...t, strikes } });
     persistAndBroadcast(get);
   },
@@ -105,11 +108,11 @@ export const useGame = create((set, get) => ({
     persistAndBroadcast(get);
   },
 
-  // buzz
-  buzz: (team) => { set({ buzzingTeam: team }); persistAndBroadcast(get); },
-  resetBuzz: () => { set({ buzzingTeam: "" }); persistAndBroadcast(get); },
+  /* ----- Buzz ----- */
+  buzz: (team)=>{ set({buzzingTeam: team}); persistAndBroadcast(get); },
+  resetBuzz: ()=>{ set({buzzingTeam:""}); persistAndBroadcast(get); },
 
-  // award (FIX: purely numeric, broadcast after set)
+  /* ----- Award bank ----- */
   awardRound: (team) => {
     const s = get();
     const key = team === "A" ? "teamA" : "teamB";
@@ -118,7 +121,8 @@ export const useGame = create((set, get) => ({
     const gain = bank * mult;
 
     const cur = s[key];
-    const nextTeam = { ...cur, score: (Number(cur.score) || 0) + gain };
+    const nextTeam = { ...cur, score: (Number(cur.score)||0) + gain };
+
     set({
       [key]: nextTeam,
       roundBank: 0,
@@ -145,14 +149,12 @@ export const useGame = create((set, get) => ({
   },
 }));
 
-// inbound sync (BroadcastChannel + storage)
+/* ---------- Inbound sync ---------- */
 if (BC) {
-  BC.onmessage = (e) => {
-    try { useGame.setState(e.data, false); } catch {}
-  };
+  BC.onmessage = (e) => { try { useGame.setState(e.data, false); } catch {} };
 }
 if (typeof window !== "undefined") {
-  window.addEventListener("storage", (ev) => {
+  window.addEventListener("storage", (ev)=>{
     if (ev.key === STORAGE_KEY && ev.newValue) {
       try { useGame.setState(JSON.parse(ev.newValue), false); } catch {}
     }
