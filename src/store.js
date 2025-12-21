@@ -1,14 +1,12 @@
 import { useSyncExternalStore } from "react";
 
 const STORAGE_KEY = "kk-game-v1";
-const BC_NAME = "kk-bc";
+const STATE_BC_NAME = "kk-bc";
+const EVENT_BC_NAME = "kk-evt"; // instant SFX/events
 
-let bc;
-try {
-  bc = new BroadcastChannel(BC_NAME);
-} catch {
-  bc = null;
-}
+let stateBc, eventBc;
+try { stateBc = new BroadcastChannel(STATE_BC_NAME); } catch { stateBc = null; }
+try { eventBc = new BroadcastChannel(EVENT_BC_NAME); } catch { eventBc = null; }
 
 let listeners = new Set();
 let isApplyingRemote = false;
@@ -20,16 +18,15 @@ const defaultState = {
   selectedRoundIndex: null,
   roundMultiplier: 1,
   revealed: Array(8).fill(false),
-  // epoch-based banking so award->0 sticks until new reveals
   revealedEpochs: Array(8).fill(-1),
   bankEpoch: 0,
+  bankOpen: true, // NEW: only count reveals while open
   bank: 0,
   teamA: { score: 0, strikes: 0 },
   teamB: { score: 0, strikes: 0 },
   buzz: null,
-  strikeFlash: null, // { team:'A'|'B', id:number }
-  // Studio SFX driver (Studio plays sounds on these)
-  lastEvent: null, // { type:'reveal'|'strike'|'buzz'|'award'|'transfer'|'reset', id:number, meta?:any }
+  strikeFlash: null,
+  lastEvent: null, // still persisted for resilience
 };
 
 function loadState() {
@@ -54,45 +51,43 @@ function loadState() {
 
 let state = loadState();
 
-function persistAndBroadcast() {
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  } catch {}
-  if (bc && !isApplyingRemote) {
-    try {
-      bc.postMessage({ type: "state", payload: state });
-    } catch {}
+function postState() {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+  if (stateBc && !isApplyingRemote) {
+    try { stateBc.postMessage({ type: "state", payload: state }); } catch {}
   }
   for (const l of listeners) l();
 }
 
-if (bc) {
-  bc.onmessage = (ev) => {
+function postEvent(evt) {
+  // evt: { type, id, meta }
+  if (eventBc) {
+    try { eventBc.postMessage(evt); } catch {}
+  }
+}
+
+if (stateBc) {
+  stateBc.onmessage = (ev) => {
     const { data } = ev;
     if (!data || data.type !== "state") return;
     isApplyingRemote = true;
     state = data.payload;
     for (const l of listeners) l();
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    } catch {}
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
     isApplyingRemote = false;
   };
 }
 
 export function useGame(selector) {
   return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
+    (l) => { listeners.add(l); return () => listeners.delete(l); },
     () => selector(state),
     () => selector(state)
   );
 }
 
-// Compute bank from tiles revealed in current bankEpoch only
-function computeBankFromEpoch(st) {
+function computeBank(st) {
+  if (!st.bankOpen) return 0;
   const idx = st.selectedRoundIndex;
   if (idx == null) return 0;
   const round = st.rounds[idx];
@@ -109,23 +104,26 @@ function computeBankFromEpoch(st) {
 
 function setState(patch) {
   state = { ...state, ...patch };
-  persistAndBroadcast();
+  postState();
 }
 
 function resetForRoundChange(newIndex) {
-  setState({
+  state = {
+    ...state,
     selectedRoundIndex: newIndex,
     roundMultiplier: state.rounds[newIndex]?.round || 1,
     revealed: Array(8).fill(false),
     revealedEpochs: Array(8).fill(-1),
     bankEpoch: 0,
+    bankOpen: true,
     bank: 0,
     teamA: { ...state.teamA, strikes: 0 },
     teamB: { ...state.teamB, strikes: 0 },
     buzz: null,
     strikeFlash: null,
     lastEvent: null,
-  });
+  };
+  postState();
 }
 
 const SAMPLE_CSV = `round,question,a1,p1,a2,p2,a3,p3,a4,p4,a5,p5,a6,p6,a7,p7,a8,p8
@@ -136,14 +134,12 @@ const SAMPLE_CSV = `round,question,a1,p1,a2,p2,a3,p3,a4,p4,a5,p5,a6,p6,a7,p7,a8,
 export const actions = {
   loadCsv(text) {
     let rounds = [];
-    try {
-      rounds = parseCsvTextInternal(text);
-    } catch (e) {
-      alert(e.message || "Failed to parse CSV");
-      return;
-    }
+    try { rounds = parseCsvTextInternal(text); }
+    catch (e) { alert(e.message || "Failed to parse CSV"); return; }
+
     const selectedRoundIndex = rounds.length ? 0 : null;
     const roundMultiplier = rounds[selectedRoundIndex]?.round || 1;
+
     state = {
       ...state,
       rounds,
@@ -152,6 +148,7 @@ export const actions = {
       revealed: Array(8).fill(false),
       revealedEpochs: Array(8).fill(-1),
       bankEpoch: 0,
+      bankOpen: true,
       bank: 0,
       teamA: { score: 0, strikes: 0 },
       teamB: { score: 0, strikes: 0 },
@@ -159,97 +156,88 @@ export const actions = {
       strikeFlash: null,
       lastEvent: null,
     };
-    persistAndBroadcast();
+    postState();
   },
-  loadSample() {
-    this.loadCsv(SAMPLE_CSV);
-  },
+  loadSample() { this.loadCsv(SAMPLE_CSV); },
   setSelectedRound(index) {
     const idx = Number(index);
-    if (Number.isNaN(idx)) return;
-    resetForRoundChange(idx);
+    if (!Number.isNaN(idx)) resetForRoundChange(idx);
   },
+
   reveal(i) {
     if (i < 0 || i > 7) return;
-    const arr = state.revealed.slice();
-    arr[i] = true;
+    const revealed = state.revealed.slice();
     const epochs = state.revealedEpochs.slice();
-    epochs[i] = state.bankEpoch;
-    const next = { ...state, revealed: arr, revealedEpochs: epochs };
-    next.bank = computeBankFromEpoch(next);
-    next.lastEvent = { type: "reveal", id: Date.now(), meta: { i } };
+    revealed[i] = true;
+    // only mark as countable if bank is open
+    epochs[i] = state.bankOpen ? state.bankEpoch : -1;
+
+    const next = { ...state, revealed, revealedEpochs: epochs };
+    next.bank = computeBank(next);
+    const evt = { type: "reveal", id: Date.now(), meta: { i } };
+    next.lastEvent = evt;
     state = next;
-    persistAndBroadcast();
+    postState();
+    postEvent(evt);
   },
   hide(i) {
     if (i < 0 || i > 7) return;
-    const arr = state.revealed.slice();
-    arr[i] = false;
-    const next = { ...state, revealed: arr };
-    next.bank = computeBankFromEpoch(next);
+    const revealed = state.revealed.slice();
+    revealed[i] = false;
+    const next = { ...state, revealed };
+    next.bank = computeBank(next);
     state = next;
-    persistAndBroadcast();
+    postState();
   },
+
   setRoundMultiplier(m) {
     const next = { ...state, roundMultiplier: Number(m) || 1 };
-    next.bank = computeBankFromEpoch(next);
+    next.bank = computeBank(next);
     state = next;
-    persistAndBroadcast();
+    postState();
   },
+
   award(team) {
     const t = team === "A" ? "teamA" : "teamB";
     const score = (state[t].score || 0) + (state.bank || 0);
+    const evt = { type: "award", id: Date.now(), meta: { team } };
     state = {
       ...state,
       [t]: { ...state[t], score },
       bank: 0,
-      bankEpoch: state.bankEpoch + 1, // start new epoch so old reveals don't add back
-      lastEvent: { type: "award", id: Date.now(), meta: { team } },
-    };
-    persistAndBroadcast();
-  },
-  // NEW: reset both teams' scores to 0 (and bank/strikes/buzz)
-  resetScores() {
-    state = {
-      ...state,
-      teamA: { score: 0, strikes: 0 },
-      teamB: { score: 0, strikes: 0 },
-      bank: 0,
+      bankOpen: false,      // freeze further counting
       bankEpoch: state.bankEpoch + 1,
-      buzz: null,
-      lastEvent: { type: "reset", id: Date.now() },
+      lastEvent: evt,
     };
-    persistAndBroadcast();
+    postState(); postEvent(evt);
   },
-  // NEW: transfer all points from one team to the other (A->B or B->A)
-  transferAll(from, to) {
-    const src = from === "A" ? "teamA" : "teamB";
-    const dst = to === "A" ? "teamA" : "teamB";
-    if (src === dst) return;
-    const amount = state[src].score || 0;
+
+  // NEW: explicitly freeze bank for reveal-only demo of remaining answers
+  endRound() {
+    const evt = { type: "award", id: Date.now(), meta: { team: null } };
     state = {
       ...state,
-      [src]: { ...state[src], score: 0 },
-      [dst]: { ...state[dst], score: (state[dst].score || 0) + amount },
-      lastEvent: { type: "transfer", id: Date.now(), meta: { from, to } },
+      bank: 0,
+      bankOpen: false,
+      bankEpoch: state.bankEpoch + 1,
+      lastEvent: evt,
     };
-    persistAndBroadcast();
+    postState(); postEvent(evt);
   },
+
   strike(team) {
-    const t = team === "A" ? "teamA" : "teamB";
-    const strikes = Math.min(3, (state[t].strikes || 0) + 1);
+    const key = team === "A" ? "teamA" : "teamB";
+    const strikes = Math.min(3, (state[key].strikes || 0) + 1);
     const flash = { team: team === "A" ? "A" : "B", id: Date.now() };
+    const evt = { type: "strike", id: flash.id, meta: { team } };
     state = {
       ...state,
-      [t]: { ...state[t], strikes },
+      [key]: { ...state[key], strikes },
       strikeFlash: flash,
-      lastEvent: { type: "strike", id: flash.id, meta: { team } },
+      lastEvent: evt,
     };
-    persistAndBroadcast();
-    setTimeout(() => {
-      state = { ...state, strikeFlash: null };
-      persistAndBroadcast();
-    }, 900);
+    postState(); postEvent(evt);
+    setTimeout(() => { state = { ...state, strikeFlash: null }; postState(); }, 900);
   },
   clearStrikes() {
     setState({
@@ -257,43 +245,55 @@ export const actions = {
       teamB: { ...state.teamB, strikes: 0 },
     });
   },
+
   buzz(team) {
-    setState({
-      buzz: team === "A" ? "A" : "B",
-      lastEvent: { type: "buzz", id: Date.now(), meta: { team } },
-    });
+    const evt = { type: "buzz", id: Date.now(), meta: { team } };
+    setState({ buzz: team === "A" ? "A" : "B", lastEvent: evt });
+    postEvent(evt);
   },
-  resetBuzz() {
-    setState({ buzz: null });
+  resetBuzz() { setState({ buzz: null }); },
+
+  resetScores() {
+    const evt = { type: "reset", id: Date.now() };
+    state = {
+      ...state,
+      teamA: { score: 0, strikes: 0 },
+      teamB: { score: 0, strikes: 0 },
+      bank: 0,
+      bankOpen: true,
+      bankEpoch: state.bankEpoch + 1,
+      buzz: null,
+      lastEvent: evt,
+    };
+    postState(); postEvent(evt);
   },
-  setTitle(title) {
-    setState({ title });
+  transferAll(from, to) {
+    const src = from === "A" ? "teamA" : "teamB";
+    const dst = to === "A" ? "teamA" : "teamB";
+    if (src === dst) return;
+    const amount = state[src].score || 0;
+    const evt = { type: "transfer", id: Date.now(), meta: { from, to, amount } };
+    state = {
+      ...state,
+      [src]: { ...state[src], score: 0 },
+      [dst]: { ...state[dst], score: (state[dst].score || 0) + amount },
+      lastEvent: evt,
+    };
+    postState(); postEvent(evt);
   },
-  setFont(font) {
-    setState({ font });
-  },
+
+  setTitle(title) { setState({ title }); },
+  setFont(font) { setState({ font }); },
 };
 
 function parseCsvTextInternal(text) {
-  const lines = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter((l) => l.length > 0);
-
-  if (lines.length === 0) return [];
-
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  if (!lines.length) return [];
   const header = lines[0].split(",").map((h) => h.trim());
-  const req = [
-    "round",
-    "question",
-    "a1","p1","a2","p2","a3","p3","a4","p4","a5","p5","a6","p6","a7","p7","a8","p8"
-  ];
-  const hasAll = req.every((k) => header.includes(k));
-  if (!hasAll) {
-    throw new Error("CSV headers must include: " + req.join(", "));
-  }
+  const req = ["round","question","a1","p1","a2","p2","a3","p3","a4","p4","a5","p5","a6","p6","a7","p7","a8","p8"];
+  if (!req.every((k) => header.includes(k))) throw new Error("CSV headers must include: " + req.join(", "));
   const idx = Object.fromEntries(header.map((h, i) => [h, i]));
-  const rows = lines.slice(1).map((line) => {
+  return lines.slice(1).map((line) => {
     const cols = line.split(",").map((c) => c.trim());
     const round = Number(cols[idx.round] || 1) || 1;
     const question = cols[idx.question] || "";
@@ -305,7 +305,6 @@ function parseCsvTextInternal(text) {
     }
     return { round, question, answers };
   });
-  return rows;
 }
 
 export { parseCsvTextInternal as parseCsvText };

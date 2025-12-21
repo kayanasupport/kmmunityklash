@@ -63,8 +63,7 @@ function RoundBoard() {
 
   const visible = useMemo(() => {
     const ans = round?.answers || [];
-    return ans
-      .map((a, i) => ({ a, i }))
+    return ans.map((a, i) => ({ a, i }))
       .filter(({ a }) => (a?.text || "").trim().length > 0 && Number(a?.points || 0) > 0);
   }, [round]);
 
@@ -126,20 +125,11 @@ function Controls() {
         <h3>Game Setup</h3>
         <div className="kk-field">
           <label>Title</label>
-          <input
-            className="kk-input"
-            value={title}
-            onChange={(e) => actions.setTitle(e.target.value)}
-            placeholder="K’mmunity Klash"
-          />
+          <input className="kk-input" value={title} onChange={(e) => actions.setTitle(e.target.value)} placeholder="K’mmunity Klash" />
         </div>
         <div className="kk-field">
           <label>Font</label>
-          <select
-            className="kk-select"
-            value={font}
-            onChange={(e) => actions.setFont(e.target.value)}
-          >
+          <select className="kk-select" value={font} onChange={(e) => actions.setFont(e.target.value)}>
             <option value="Bangers">Bangers (titles)</option>
             <option value="system-ui">System UI</option>
           </select>
@@ -178,9 +168,7 @@ function Controls() {
             {rounds.map((r, i) => {
               const q = (r?.question ?? "").slice(0, 60);
               const mult = r?.round ?? 1;
-              return (
-                <option key={i} value={i}>{`#${i + 1} — x${mult} — ${q}`}</option>
-              );
+              return <option key={i} value={i}>{`#${i + 1} — x${mult} — ${q}`}</option>;
             })}
           </select>
         </div>
@@ -188,13 +176,7 @@ function Controls() {
           <label>Multiplier</label>
           <div className="kk-pillset">
             {[1, 2, 3].map((m) => (
-              <button
-                key={m}
-                className={`kk-pill ${m === roundMultiplier ? "active" : ""}`}
-                onClick={() => actions.setRoundMultiplier(m)}
-              >
-                x{m}
-              </button>
+              <button key={m} className={`kk-pill ${m === roundMultiplier ? "active" : ""}`} onClick={() => actions.setRoundMultiplier(m)}>x{m}</button>
             ))}
           </div>
         </div>
@@ -202,16 +184,16 @@ function Controls() {
 
       <div className="kk-panel">
         <h3>Award / Buzz / Strikes</h3>
-        <div className="kk-actions-row wrap">
+        <div className="kk-actions-row wrap fit">
           <button className="kk-btn primary" onClick={() => actions.award("A")} title="W">Award → Team A</button>
           <button className="kk-btn primary" onClick={() => actions.award("B")} title="E">Award → Team B</button>
         </div>
-        <div className="kk-actions-row wrap">
+        <div className="kk-actions-row wrap fit">
           <button className="kk-btn warn" onClick={() => actions.strike("A")} title="S">+ Strike A</button>
           <button className="kk-btn warn" onClick={() => actions.strike("B")} title="D">+ Strike B</button>
           <button className="kk-btn" onClick={() => actions.clearStrikes()}>Clear</button>
         </div>
-        <div className="kk-actions-row wrap">
+        <div className="kk-actions-row wrap fit">
           <button className="kk-btn buzz" onClick={() => actions.buzz("A")} title="A">Buzz A</button>
           <button className="kk-btn buzz" onClick={() => actions.buzz("B")} title="B">Buzz B</button>
           <button className="kk-btn" onClick={() => actions.resetBuzz()} title="R">Reset Buzz</button>
@@ -220,11 +202,19 @@ function Controls() {
 
       <div className="kk-panel">
         <h3>Scores (Admin)</h3>
-        <div className="kk-actions-row wrap">
+        <div className="kk-actions-row wrap fit">
           <button className="kk-btn" onClick={() => actions.resetScores()}>Reset Scores</button>
           <button className="kk-btn" onClick={() => actions.transferAll("A", "B")}>Give A → B</button>
           <button className="kk-btn" onClick={() => actions.transferAll("B", "A")}>Give B → A</button>
         </div>
+      </div>
+
+      <div className="kk-panel">
+        <h3>Round Control</h3>
+        <div className="kk-actions-row wrap fit">
+          <button className="kk-btn warn" onClick={() => actions.endRound()}>Round Over (Freeze Bank)</button>
+        </div>
+        <div className="kk-help">After freezing, reveals won’t add to the bank. Selecting a new round re-opens the bank.</div>
       </div>
 
       <div className="kk-panel">

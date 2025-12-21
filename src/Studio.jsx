@@ -36,42 +36,36 @@ export default function Studio() {
   const bank = useGame((s) => s.bank);
   const buzz = useGame((s) => s.buzz);
   const strikeFlash = useGame((s) => s.strikeFlash);
-  const lastEvent = useGame((s) => s.lastEvent);
 
   const visible = useMemo(() => {
     const ans = round?.answers || [];
-    return ans
-      .map((a, i) => ({ a, i }))
+    return ans.map((a, i) => ({ a, i }))
       .filter(({ a }) => (a?.text || "").trim().length > 0 && Number(a?.points || 0) > 0);
   }, [round]);
 
-  // Autoplay policy: require a one-time user gesture on Studio.
-  const [audioReady, setAudioReady] = useState(
-    () => localStorage.getItem("kk-audio-ready") === "1"
-  );
-  const primeAudio = async () => {
-    // Try prime each tag quickly; then pause
+  // Audio enable (autoplay policy)
+  const [audioReady, setAudioReady] = useState(() => localStorage.getItem("kk-audio-ready") === "1");
+  async function primeAudio() {
     setAudioReady(true);
     localStorage.setItem("kk-audio-ready", "1");
-    try {
-      await sfx.prime();
-    } catch {}
-  };
+    try { await sfx.prime(); } catch {}
+  }
 
-  // Play SFX on Studio when events arrive
+  // Fast path: listen to instantaneous event channel for SFX
   useEffect(() => {
-    if (!audioReady || !lastEvent?.id) return;
-    if (lastEvent.type === "reveal") {
-      sfx.safePlay(() => sfx.reveal.play());
-    } else if (lastEvent.type === "strike") {
-      sfx.safePlay(() => sfx.strike.play());
-    } else if (lastEvent.type === "buzz") {
-      sfx.safePlay(() => sfx.buzz.play());
-    } else if (lastEvent.type === "award" || lastEvent.type === "transfer" || lastEvent.type === "reset") {
-      sfx.safePlay(() => sfx.award.play());
-    }
-  }, [audioReady, lastEvent?.id]);
+    const bc = new BroadcastChannel("kk-evt");
+    bc.onmessage = (ev) => {
+      if (!audioReady) return;
+      const { type } = ev.data || {};
+      if (type === "reveal") sfx.safePlay(() => sfx.reveal.play());
+      else if (type === "strike") sfx.safePlay(() => sfx.strike.play());
+      else if (type === "buzz") sfx.safePlay(() => sfx.buzz.play());
+      else if (type === "award" || type === "transfer" || type === "reset") sfx.safePlay(() => sfx.award.play());
+    };
+    return () => bc.close();
+  }, [audioReady]);
 
+  // Strike big X overlay
   const [flashId, setFlashId] = useState(null);
   useEffect(() => {
     if (strikeFlash?.id) {
@@ -85,9 +79,7 @@ export default function Studio() {
     <div className={`kk-studio ${font === "Bangers" ? "font-bangers" : ""}`} onClick={() => { if (!audioReady) primeAudio(); }}>
       <div className="kk-studio-frame">
         {!audioReady && (
-          <button className="kk-audio-primer" onClick={primeAudio}>
-            Enable Audio
-          </button>
+          <button className="kk-audio-primer" onClick={primeAudio}>Enable Audio</button>
         )}
 
         <div className="kk-studio-header">
