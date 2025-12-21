@@ -1,240 +1,210 @@
-import { create } from "zustand";
-import { persist, createJSONStorage } from "zustand/middleware";
+// src/store.js
+// Single source of truth for host + studio tabs.
+// Persists to localStorage and syncs via BroadcastChannel.
 
-// ---------- Cross-tab channel ----------
-const bc =
-  typeof window !== "undefined" && "BroadcastChannel" in window
-    ? new BroadcastChannel("kk-game")
-    : null;
+const VERSION = 'kk-game-v1';
+const STORAGE_KEY = VERSION;
 
-// ---------- Serializable state helpers ----------
-const SERIAL_KEYS = [
-  "title",
-  "titleFont",
-  "hostMode",
-  "round",
-  "roundBank",
-  "buzzingTeam",
-  "teamA",
-  "teamB",
-  "sheetId",
-];
-
-const snapshotFrom = (s) => {
-  const snap = {};
-  for (const k of SERIAL_KEYS) snap[k] = s[k];
-  return snap;
-};
-
-const pushOut = (state) => {
+const bc = (() => {
   try {
-    if (bc) bc.postMessage({ type: "sync", payload: snapshotFrom(state) });
+    return new BroadcastChannel('kk-bus');
   } catch {
-    // ignore cloning errors silently
+    return null;
   }
-};
+})();
 
-// ---------- Defaults ----------
-const initialRound = {
-  question: "",
-  multiplier: 1,
-  answers: [], // { text, points, revealed }
-};
+const defaultState = () => ({
+  title: 'K’mmunity Klash',
+  font: 'Bangers',
+  roundMultiplier: 1,
+  // round: { question, answers: [{ text, points, revealed }] }
+  round: null,
+  bank: 0,
+  teamA: { score: 0, strikes: 0 },
+  teamB: { score: 0, strikes: 0 },
+  // UI
+  buzz: null, // 'A' | 'B' | null
+});
 
-const initialState = {
-  title: "K'mmunity Klash",
-  titleFont: "Bangers",
-  hostMode: true,
+function loadState() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return defaultState();
+    const parsed = JSON.parse(raw);
+    // guard shape
+    return { ...defaultState(), ...parsed };
+  } catch {
+    return defaultState();
+  }
+}
 
-  round: initialRound,
-  roundBank: 0,
-  buzzingTeam: null,
+let state = loadState();
+const listeners = new Set();
 
-  teamA: { name: "Team A", score: 0, strikes: 0 },
-  teamB: { name: "Team B", score: 0, strikes: 0 },
+function emit() {
+  // persist
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  } catch {}
+  // notify same-tab
+  listeners.forEach((fn) => fn(state));
+  // broadcast cross-tab
+  try {
+    bc?.postMessage({ type: 'kk-state', payload: state });
+  } catch {}
+}
 
-  sheetId:
-    (typeof window !== "undefined" && localStorage.getItem("sheetId")) || "",
-};
+// Cross-tab receive
+bc?.addEventListener('message', (e) => {
+  const msg = e.data;
+  if (msg?.type !== 'kk-state') return;
+  state = msg.payload;
+  listeners.forEach((fn) => fn(state));
+});
 
-// ---------- Utils ----------
-const recalcBank = (round) =>
-  (round?.answers || [])
-    .filter((a) => a.revealed)
-    .reduce((sum, a) => sum + (Number(a.points) || 0), 0);
+// ---- Helpers ----
+function recalcBank() {
+  if (!state.round) {
+    state.bank = 0;
+    return;
+  }
+  const total =
+    state.round.answers
+      .filter((a) => a.revealed)
+      .reduce((sum, a) => sum + (Number(a.points) || 0), 0) || 0;
+  state.bank = total * (Number(state.roundMultiplier) || 1);
+}
 
-// ---------- Store ----------
-export const useGame = create(
-  persist(
-    (set, get) => ({
-      ...initialState,
-
-      // Title / font
-      setTitle: (title) =>
-        set((s) => {
-          const base = snapshotFrom(s);
-          const ns = { ...base, title };
-          pushOut(ns);
-          return ns;
-        }),
-      setTitleFont: (titleFont) =>
-        set((s) => {
-          const base = snapshotFrom(s);
-          const ns = { ...base, titleFont };
-          pushOut(ns);
-          return ns;
-        }),
-
-      // Round load / reveal
-      setRound: (round) =>
-        set((s) => {
-          const base = snapshotFrom(s);
-          const clean = {
-            question: round?.question || "",
-            multiplier: Number(round?.multiplier) || 1,
-            answers: (round?.answers || []).map((a) => ({
-              text: a.text || "",
-              points: Number(a.points) || 0,
-              revealed: !!a.revealed && !!a.text && Number(a.points) > 0,
-            })),
-          };
-          const ns = {
-            ...base,
-            round: clean,
-            roundBank: recalcBank(clean),
-            buzzingTeam: null,
-            teamA: { ...base.teamA, strikes: 0 },
-            teamB: { ...base.teamB, strikes: 0 },
-          };
-          pushOut(ns);
-          return ns;
-        }),
-
-      reveal: (index) =>
-        set((s) => {
-          const base = snapshotFrom(s);
-          const r = {
-            ...base.round,
-            answers: base.round.answers.map((a, i) =>
-              i === index ? { ...a, revealed: !a.revealed } : a
-            ),
-          };
-          const ns = { ...base, round: r, roundBank: recalcBank(r) };
-          pushOut(ns);
-          return ns;
-        }),
-
-      // Buzz
-      buzz: (team) =>
-        set((s) => {
-          const base = snapshotFrom(s);
-          const ns = { ...base, buzzingTeam: team === "B" ? "B" : "A" };
-          pushOut(ns);
-          return ns;
-        }),
-      resetBuzz: () =>
-        set((s) => {
-          const base = snapshotFrom(s);
-          const ns = { ...base, buzzingTeam: null };
-          pushOut(ns);
-          return ns;
-        }),
-
-      // Strikes
-      addStrike: (team) =>
-        set((s) => {
-          const base = snapshotFrom(s);
-          const key = team === "B" ? "teamB" : "teamA";
-          const cur = base[key];
-          const next = Math.min(3, (cur.strikes || 0) + 1);
-          const ns = { ...base, [key]: { ...cur, strikes: next } };
-          pushOut(ns);
-          return ns;
-        }),
-      clearStrikes: () =>
-        set((s) => {
-          const base = snapshotFrom(s);
-          const ns = {
-            ...base,
-            teamA: { ...base.teamA, strikes: 0 },
-            teamB: { ...base.teamB, strikes: 0 },
-          };
-          pushOut(ns);
-          return ns;
-        }),
-
-      // Award
-      awardRound: (team) =>
-        set((s) => {
-          const base = snapshotFrom(s);
-          const bank = Number(base.roundBank) || 0;
-          const mult = Number(base.round?.multiplier) || 1;
-          const delta = bank * mult;
-
-          const key = team === "B" ? "teamB" : "teamA";
-          const cur = base[key];
-
-          const ns = {
-            ...base,
-            [key]: { ...cur, score: (Number(cur.score) || 0) + delta },
-            roundBank: 0,
-            buzzingTeam: null,
-            teamA: { ...base.teamA, strikes: 0 },
-            teamB: { ...base.teamB, strikes: 0 },
-          };
-          pushOut(ns);
-          return ns;
-        }),
-
-      // Scores/tools
-      resetScores: () =>
-        set((s) => {
-          const base = snapshotFrom(s);
-          const ns = {
-            ...base,
-            teamA: { ...base.teamA, score: 0, strikes: 0 },
-            teamB: { ...base.teamB, score: 0, strikes: 0 },
-            roundBank: recalcBank(base.round),
-            buzzingTeam: null,
-          };
-          pushOut(ns);
-          return ns;
-        }),
-    }),
-    {
-      name: "kk-game-v1",
-      storage: createJSONStorage(() => localStorage),
-      // Persist ONLY the serializable snapshot
-      partialize: (s) => snapshotFrom(s),
-    }
-  )
-);
-
-// ---------- Incoming sync ----------
-if (bc) {
-  bc.onmessage = (ev) => {
-    if (ev?.data?.type === "sync" && ev.data.payload) {
-      const payload = ev.data.payload;
-      useGame.setState(
-        (prev) => ({ ...prev, ...payload }),
-        false,
-        "bc-sync"
-      );
-    }
+function setRound(data) {
+  // data: { question, answers:[{text, points}], multiplier? }
+  state.round = {
+    question: data.question,
+    answers: (data.answers || []).map((a) => ({
+      text: a.text,
+      points: Number(a.points) || 0,
+      revealed: false,
+    })),
   };
+  state.roundMultiplier = Number(data.multiplier || 1);
+  state.bank = 0;
+  state.teamA.strikes = 0;
+  state.teamB.strikes = 0;
+  state.buzz = null;
+  emit();
 }
 
-// Fallback sync for other tabs
-if (typeof window !== "undefined") {
-  window.addEventListener("storage", (e) => {
-    if (e.key === "kk-game-v1") {
-      try {
-        const parsed = JSON.parse(e.newValue || "{}");
-        const data = parsed?.state;
-        if (data) useGame.setState((prev) => ({ ...prev, ...data }), false, "storage-sync");
-      } catch {
-        // ignore
-      }
-    }
-  });
+function revealIndex(idx) {
+  if (!state.round) return;
+  const entry = state.round.answers[idx];
+  if (!entry) return;
+  entry.revealed = !entry.revealed; // toggle
+  recalcBank();
+  emit();
 }
+
+function clearRoundUI() {
+  state.buzz = null;
+  emit();
+}
+
+function awardTo(teamKey /* 'teamA' | 'teamB' */) {
+  const amt = Number(state.bank) || 0;
+  if (amt <= 0) return;
+  if (!['teamA', 'teamB'].includes(teamKey)) return;
+
+  // ✅ add points, then zero the bank
+  const team = state[teamKey];
+  team.score = Number(team.score || 0) + amt;
+  state.bank = 0;
+
+  // optional: clear strikes on award (classic Feud behavior keeps strikes; we’ll keep them)
+  emit();
+}
+
+function addStrike(teamKey) {
+  if (!['teamA', 'teamB'].includes(teamKey)) return;
+  const team = state[teamKey];
+  team.strikes = Math.min(3, (Number(team.strikes) || 0) + 1);
+  emit();
+}
+
+function clearStrikes() {
+  state.teamA.strikes = 0;
+  state.teamB.strikes = 0;
+  emit();
+}
+
+function setTitle(t) {
+  state.title = t || 'K’mmunity Klash';
+  emit();
+}
+
+function setFont(f) {
+  state.font = f || 'Bangers';
+  emit();
+}
+
+function setMultiplier(m) {
+  state.roundMultiplier = Number(m) || 1;
+  recalcBank();
+  emit();
+}
+
+function buzz(teamKey) {
+  state.buzz = teamKey; // 'teamA' or 'teamB'
+  emit();
+}
+
+function resetBuzz() {
+  state.buzz = null;
+  emit();
+}
+
+function resetScores() {
+  state.teamA.score = 0;
+  state.teamB.score = 0;
+  state.teamA.strikes = 0;
+  state.teamB.strikes = 0;
+  state.bank = 0;
+  if (state.round?.answers) {
+    state.round.answers.forEach((a) => (a.revealed = false));
+  }
+  emit();
+}
+
+// Public API
+export const Store = {
+  get: () => state,
+  subscribe(fn) {
+    listeners.add(fn);
+    return () => listeners.delete(fn);
+  },
+  // Mutations
+  setRound,
+  revealIndex,
+  clearRoundUI,
+  awardTo,
+  addStrike,
+  clearStrikes,
+  setTitle,
+  setFont,
+  setMultiplier,
+  buzz,
+  resetBuzz,
+  resetScores,
+  // utilities for CSV/Sheets mapping
+  fromRow(row) {
+    // row: { round, question, a1, p1, a2, p2, ... }
+    const answers = [];
+    for (let i = 1; i <= 8; i++) {
+      const text = row[`a${i}`];
+      const pts = Number(row[`p${i}`]);
+      if (text && !Number.isNaN(pts)) answers.push({ text, points: pts });
+    }
+    return {
+      question: row.question?.toString() || 'Round',
+      answers,
+      multiplier: Number(row.round) || 1,
+    };
+  },
+};

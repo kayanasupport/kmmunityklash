@@ -1,312 +1,335 @@
-import React, { useMemo, useRef, useState } from "react";
-import { useGame } from "./store";
-import "./styles.css";
+// src/App.jsx
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Store } from './store';
+import './styles.css';
 
-// Small helpers for CSV → round objects
-const parseCSV = async (file) => {
-  const text = await file.text();
-  const rows = text
-    .split(/\r?\n/)
-    .map((r) => r.trim())
-    .filter(Boolean)
-    .map((r) => r.split(","));
-  if (!rows.length) return [];
+function useStore() {
+  const [, force] = useState(0);
+  useEffect(() => Store.subscribe(() => force((n) => n + 1)), []);
+  return Store.get();
+}
 
-  // headers: round,question,a1,p1,a2,p2,...
-  const header = rows[0].map((h) => h.trim().toLowerCase());
-  const idx = {
-    round: header.indexOf("round"),
-    question: header.indexOf("question"),
-  };
+function AnswerCard({ a, i }) {
+  return (
+    <button
+      className={`ans ${a.revealed ? 'revealed' : ''}`}
+      onClick={() => Store.revealIndex(i)}
+      title="Toggle reveal"
+    >
+      <span className="num">{i + 1}</span>
+      <span className="txt">{a.revealed ? a.text : '— — — —'}</span>
+      <span className="pts">{a.revealed ? a.points : ''}</span>
+    </button>
+  );
+}
 
-  const rounds = [];
-  for (let i = 1; i < rows.length; i++) {
-    const r = rows[i];
-    const roundNo = Number(r[idx.round] || 1);
-    const question = r[idx.question] || "";
-    const answers = [];
-    for (let j = 2; j < header.length; j += 2) {
-      const aText = r[j] || "";
-      const p = Number(r[j + 1] || 0);
-      if (aText && p > 0) answers.push({ text: aText, points: p, revealed: false });
-    }
-    // Family-Feud feel: default x1
-    rounds.push({
-      id: `${roundNo}-${i}`,
-      question,
-      multiplier: 1,
-      answers,
-    });
+function Board() {
+  const s = useStore();
+  if (!s.round) {
+    return (
+      <div className="board wait">
+        <div className="title">Load a round…</div>
+      </div>
+    );
   }
-  return rounds;
-};
-
-function ScoreBar({ team, label }) {
   return (
-    <div className="scoreBox">
-      <div className="scoreLabel">{label}</div>
-      <div className="scoreValue">{team.score || 0}</div>
-      <div className="strikeRow">
-        {[...Array(3)].map((_, i) => (
-          <span key={i} className={`strikeDot ${team.strikes > i ? "on" : ""}`}>X</span>
+    <div className="board">
+      <div className="title">
+        <span className="pill">Round Multiplier: x{s.roundMultiplier}</span>
+        <span className="q">{s.round.question}</span>
+        <span className="pill">Answers: {s.round.answers.length}</span>
+      </div>
+      <div className="grid">
+        {s.round.answers.map((a, i) => (
+          <AnswerCard key={i} a={a} i={i} />
         ))}
       </div>
-    </div>
-  );
-}
 
-function BankCard() {
-  const bank = useGame((s) => s.roundBank);
-  const mult = useGame((s) => s.round?.multiplier || 1);
-  return (
-    <div className="bankBadge">
-      Bank <span className="mono">{bank}</span> × <span className="mono">{mult}</span> ={" "}
-      <b className="mono">{bank * mult}</b>
-    </div>
-  );
-}
-
-function Controls() {
-  const hostMode = useGame((s) => s.hostMode);
-  const setTitle = useGame((s) => s.setTitle);
-  const setTitleFont = useGame((s) => s.setTitleFont);
-
-  const setRound = useGame((s) => s.setRound);
-  const reveal = useGame((s) => s.reveal);
-  const addStrike = useGame((s) => s.addStrike);
-  const clearStrikes = useGame((s) => s.clearStrikes);
-  const buzz = useGame((s) => s.buzz);
-  const resetBuzz = useGame((s) => s.resetBuzz);
-  const awardRound = useGame((s) => s.awardRound);
-  const resetScores = useGame((s) => s.resetScores);
-
-  const title = useGame((s) => s.title);
-  const titleFont = useGame((s) => s.titleFont);
-  const round = useGame((s) => s.round);
-  const teamA = useGame((s) => s.teamA);
-  const teamB = useGame((s) => s.teamB);
-  const buzzingTeam = useGame((s) => s.buzzingTeam);
-
-  const [rounds, setRounds] = useState([]);
-  const [selected, setSelected] = useState(null);
-
-  const fileRef = useRef(null);
-
-  const onCSV = async (e) => {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    const parsed = await parseCSV(f);
-    setRounds(parsed);
-    if (parsed.length) {
-      setSelected(parsed[0].id);
-      setRound(parsed[0]);
-      alert("Sample round loaded");
-    }
-  };
-
-  const onLoadSelected = () => {
-    if (!rounds.length) return;
-    const r = rounds.find((x) => x.id === selected) || rounds[0];
-    setRound(r);
-  };
-
-  const allRevealed = useMemo(
-    () => (round?.answers || []).every((a) => a.revealed),
-    [round]
-  );
-
-  return (
-    <div className="panel">
-      <div className="toolbar">
-        <button className={`hostBtn ${hostMode ? "on" : ""}`} disabled>
-          Host Mode: {hostMode ? "ON" : "OFF"}
-        </button>
-        <button className="reset" onClick={resetScores}>
-          Reset Scores
-        </button>
-      </div>
-
-      <div className="row">
-        <button
-          className="shareBtn"
-          onClick={() => {
-            const url = `${location.origin}/studio`;
-            window.open(url, "_blank", "noopener,noreferrer");
-          }}
-        >
-          Open Studio View (share this tab)
-        </button>
-      </div>
-
-      <div className="form">
-        <label>Game Title</label>
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="K'mmunity Klash"
-        />
-      </div>
-
-      <div className="form">
-        <label>Title Font</label>
-        <select value={titleFont} onChange={(e) => setTitleFont(e.target.value)}>
-          <option>Bangers (bold comic)</option>
-          <option>Anton</option>
-          <option>Montserrat</option>
-          <option>Poppins</option>
-        </select>
-      </div>
-
-      <div className="form">
-        <label>Or upload a CSV (same headers)</label>
-        <input type="file" accept=".csv" ref={fileRef} onChange={onCSV} />
-      </div>
-
-      <div className="row">
-        <button className="primary wide" onClick={async () => {
-          // quick demo loader without a real sheet
-          if (!rounds.length) {
-            alert("Choose a CSV first, then pick a round.");
-            return;
-          }
-          setRound(rounds[0]);
-        }}>
-          Load Sample Round
-        </button>
-      </div>
-
-      <div className="row">
-        <div className="selectGroup">
-          <label>Load Selected Round</label>
-          <div className="selectRow">
-            <button className="primary" onClick={onLoadSelected}>
-              Load Selected Round
-            </button>
-            <select
-              value={selected || ""}
-              onChange={(e) => setSelected(e.target.value)}
-              className="selectDark"
-            >
-              {rounds.map((r) => (
-                <option key={r.id} value={r.id}>
-                  #{r.id.split("-")[0]} • x{r.multiplier} • {r.question.slice(0, 40)}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-      </div>
-
-      <div className="awardRow">
-        <button className="award" onClick={() => awardRound("A")}>
-          Award to Team A
-        </button>
-        <BankCard />
-        <button className="award" onClick={() => awardRound("B")}>
-          Award to Team B
-        </button>
-      </div>
-
-      <div className="strikeControls">
-        <div className="strikeCol">
-          <button onClick={() => addStrike("A")}>+ Strike A</button>
-        </div>
-        <div className="strikeCol">
-          <button onClick={() => addStrike("B")}>+ Strike B</button>
-        </div>
-        <div className="strikeCol">
-          <button onClick={clearStrikes}>Clear</button>
-        </div>
-      </div>
-
-      <div className="buzzControls">
-        <button
-          className={`buzz ${buzzingTeam === "A" ? "lit" : ""}`}
-          onClick={() => buzz("A")}
-        >
-          Buzz Team A
-        </button>
-        <button className="buzz reset" onClick={resetBuzz}>
-          Reset
-        </button>
-        <button
-          className={`buzz ${buzzingTeam === "B" ? "lit" : ""}`}
-          onClick={() => buzz("B")}
-        >
-          Buzz Team B
-        </button>
-      </div>
-
-      <div className="kbd">
-        <div>Keyboard (host):</div>
-        <div>1–8 = reveal/hide answer</div>
-        <div>R = reset buzz • S = +strike (A), D = +strike (B)</div>
-        <div>W = award A, E = award B</div>
-      </div>
-
-      {/* Live scores for host */}
-      <div className="scoreRow">
-        <ScoreBar team={teamA} label={teamA.name} />
-        <ScoreBar team={teamB} label={teamB.name} />
-      </div>
-
-      {/* Answer grid (host can toggle) */}
-      <div className="answersHost">
-        {(round?.answers || []).map((a, i) => (
-          <button
-            key={i}
-            className={`answerBtn ${a.revealed ? "on" : ""}`}
-            onClick={() => reveal(i)}
-            title="Click to reveal/hide"
-          >
-            <span className="num">{i + 1}</span>
-            <span className="txt">{a.text || "—"}</span>
-            <span className="pts">{a.revealed ? a.points : ""}</span>
+      <div className={`buzz ${s.buzz ? 'show' : ''}`}>
+        {s.buzz ? `BUZZ! First buzz: ${s.buzz === 'teamA' ? 'Team A' : 'Team B'}` : ''}
+        {!!s.buzz && (
+          <button className="link" onClick={() => Store.resetBuzz()}>
+            Reset
           </button>
-        ))}
-        {!round?.answers?.length && (
-          <div className="empty">Load a round…</div>
         )}
       </div>
     </div>
   );
 }
 
-export default function App() {
-  // bind some hotkeys for host convenience
-  const reveal = useGame((s) => s.reveal);
-  const addStrike = useGame((s) => s.addStrike);
-  const resetBuzz = useGame((s) => s.resetBuzz);
-  const awardRound = useGame((s) => s.awardRound);
+function ScoreBar() {
+  const s = useStore();
+  return (
+    <div className="scores">
+      <div className="col">
+        <div className="label">Team A</div>
+        <div className="big">{s.teamA.score}</div>
+        <div className="strikes">
+          {[0, 1, 2].map((i) => (
+            <span key={i} className={`x ${s.teamA.strikes > i ? 'on' : ''}`}>
+              x
+            </span>
+          ))}
+        </div>
+      </div>
 
-  React.useEffect(() => {
-    const onKey = (e) => {
-      if (/^[1-8]$/.test(e.key)) {
-        e.preventDefault();
-        reveal(Number(e.key) - 1);
-      } else if (e.key.toLowerCase() === "s") {
-        addStrike("A");
-      } else if (e.key.toLowerCase() === "d") {
-        addStrike("B");
-      } else if (e.key.toLowerCase() === "r") {
-        resetBuzz();
-      } else if (e.key.toLowerCase() === "w") {
-        awardRound("A");
-      } else if (e.key.toLowerCase() === "e") {
-        awardRound("B");
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [reveal, addStrike, resetBuzz, awardRound]);
+      <div className="bank">
+        <div className="mini">Bank</div>
+        <div className="chip">
+          {s.bank} <span className="mul">× {s.roundMultiplier}</span>
+        </div>
+      </div>
+
+      <div className="col">
+        <div className="label">Team B</div>
+        <div className="big">{s.teamB.score}</div>
+        <div className="strikes">
+          {[0, 1, 2].map((i) => (
+            <span key={i} className={`x ${s.teamB.strikes > i ? 'on' : ''}`}>
+              x
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Controls() {
+  const s = useStore();
+  const [csv, setCsv] = useState(null);
+  const [options, setOptions] = useState([]);
+  const [selected, setSelected] = useState('');
+
+  // CSV loader (client-side)
+  async function loadCSV(file) {
+    const txt = await file.text();
+    // very small CSV parser for your headers
+    const lines = txt.split(/\r?\n/).filter(Boolean);
+    if (lines.length < 2) return;
+    const headers = lines[0].split(',').map((h) => h.trim());
+    const rows = lines.slice(1).map((ln) => {
+      const cols = ln.split(',').map((c) => c.trim());
+      const obj = {};
+      headers.forEach((h, i) => (obj[h] = cols[i]));
+      return obj;
+    });
+    // create round options
+    const rounds = rows.map((r, idx) => {
+      const data = Store.fromRow(r);
+      return {
+        id: `#${idx + 1} • x${data.multiplier} • ${data.question}`.slice(0, 60),
+        data,
+      };
+    });
+    setOptions(rounds);
+    if (rounds[0]) {
+      setSelected(rounds[0].id);
+      Store.setRound(rounds[0].data);
+    }
+  }
+
+  async function handleLoadSample() {
+    const r = await fetch('/kmmunity_klash_sample.csv').then((r) => r.text());
+    const file = new File([r], 'sample.csv', { type: 'text/csv' });
+    setCsv(file);
+    await loadCSV(file);
+    alert('Sample round loaded');
+  }
+
+  function handleSelectChange(e) {
+    const id = e.target.value;
+    setSelected(id);
+    const found = options.find((o) => o.id === id);
+    if (found) {
+      Store.setRound(found.data);
+    }
+  }
 
   return (
-    <div className="wrap">
-      <header className="brand">
-        <div className="badge">KK</div>
-        <div className="title">K’MMUNITY KLASH</div>
+    <div className="panel">
+      <div className="row topbar">
+        <div className="switch">Host Mode: ON</div>
+        <button
+          className="btn ghost"
+          onClick={() => {
+            Store.resetScores();
+          }}
+        >
+          Reset Scores
+        </button>
+      </div>
+
+      <button
+        className="btn primary"
+        onClick={() => window.open('/studio', '_blank')}
+        title="Open the studio view in a second tab and share that tab in Meet"
+      >
+        Open Studio View (share this tab)
+      </button>
+
+      <label className="lbl">Game Title</label>
+      <input
+        className="txt"
+        value={s.title}
+        onChange={(e) => Store.setTitle(e.target.value)}
+      />
+
+      <label className="lbl">Title Font</label>
+      <select
+        className="sel high-contrast"
+        value={s.font}
+        onChange={(e) => Store.setFont(e.target.value)}
+      >
+        <option>Bangers (bold comic)</option>
+        <option>Anton</option>
+        <option>Impact</option>
+        <option>Oswald</option>
+      </select>
+
+      <div className="sp" />
+
+      <label className="lbl">Or upload a CSV (same headers)</label>
+      <input
+        className="file"
+        type="file"
+        accept=".csv"
+        onChange={(e) => e.target.files?.[0] && loadCSV(e.target.files[0])}
+      />
+      <button className="btn" onClick={handleLoadSample}>
+        Load Sample Round
+      </button>
+
+      <div className="sp" />
+
+      <label className="lbl">Load Selected Round</label>
+      <div className="row">
+        <button
+          className="btn"
+          onClick={() => {
+            const found = options.find((o) => o.id === selected);
+            if (found) Store.setRound(found.data);
+          }}
+        >
+          Load Selected
+          <br />
+          Round
+        </button>
+        <select
+          className="sel high-contrast grow"
+          value={selected}
+          onChange={handleSelectChange}
+        >
+          {options.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.id}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="bankRow">
+        <button className="btn success" onClick={() => Store.awardTo('teamA')}>
+          Award to
+          <br />
+          Team A
+        </button>
+        <div className="bankChip">
+          <div className="mini">Bank</div>
+          <div className="big">
+            {s.bank} <span className="mul">× {s.roundMultiplier}</span>
+          </div>
+        </div>
+        <button className="btn success" onClick={() => Store.awardTo('teamB')}>
+          Award to
+          <br />
+          Team B
+        </button>
+      </div>
+
+      <div className="row">
+        <button className="btn" onClick={() => Store.addStrike('teamA')}>
+          + Strike A
+        </button>
+        <button className="btn" onClick={() => Store.addStrike('teamB')}>
+          + Strike B
+        </button>
+        <button className="btn ghost" onClick={() => Store.clearStrikes()}>
+          Clear
+        </button>
+      </div>
+
+      <div className="row">
+        <button className="btn warn" onClick={() => Store.buzz('teamA')}>
+          Buzz
+          <br />
+          Team A
+        </button>
+        <button className="btn ghost" onClick={() => Store.resetBuzz()}>
+          Reset
+        </button>
+        <button className="btn warn" onClick={() => Store.buzz('teamB')}>
+          Buzz
+          <br />
+          Team B
+        </button>
+      </div>
+
+      <div className="keys">
+        <div>Keyboard (host):</div>
+        <div>1–8 = reveal/hide answer</div>
+        <div>R = reset buzz</div>
+        <div>S = +strike (A), D = +strike (B)</div>
+        <div>W = award A, E = award B</div>
+      </div>
+    </div>
+  );
+}
+
+export default function App() {
+  // Keyboard shortcuts (host)
+  const s = useStore();
+  const ready = !!s.round;
+
+  useEffect(() => {
+    function onKey(e) {
+      if (!ready) return;
+      const k = e.key.toLowerCase();
+      if (k >= '1' && k <= '8') {
+        const idx = Number(k) - 1;
+        Store.revealIndex(idx);
+      } else if (k === 'r') {
+        Store.resetBuzz();
+      } else if (k === 's') {
+        Store.addStrike('teamA');
+      } else if (k === 'd') {
+        Store.addStrike('teamB');
+      } else if (k === 'w') {
+        Store.awardTo('teamA');
+      } else if (k === 'e') {
+        Store.awardTo('teamB');
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [ready]);
+
+  return (
+    <div className={`app font-${s.font?.toLowerCase().split(' ')[0] || 'bangers'}`}>
+      <header className="hdr">
+        <div className="logo">KK</div>
+        <div className="brand">{s.title}</div>
       </header>
-      <Controls />
+
+      <div className="layout">
+        <div className="left">
+          <Board />
+          <ScoreBar />
+        </div>
+        <div className="right">
+          <Controls />
+        </div>
+      </div>
     </div>
   );
 }
