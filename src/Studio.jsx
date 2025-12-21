@@ -1,64 +1,117 @@
-import React from "react";
-import { useGame } from "./store";
-import "./styles.css";
+// src/Studio.jsx
+import React, { useEffect, useRef } from 'react';
+import { useGame } from './store';           // <- your Zustand store
+import { SFX } from './sfx';
+import './styles.css';
 
 export default function Studio() {
-  const {
-    title, titleFont, rounds, currentRoundIndex, revealed,
-    teamA, teamB, strikesA, strikesB, bank, buzz, roundMultiplier
-  } = useGame();
+  // Select only what we need to render + compare
+  const title      = useGame(s => s.round?.question || 'Waiting for host to load a round...');
+  const answers    = useGame(s => s.round?.answers || []); // [{text, points, revealed}, ...]
+  const strikesA   = useGame(s => s.strikes?.A || 0);
+  const strikesB   = useGame(s => s.strikes?.B || 0);
+  const buzzTeam   = useGame(s => s.buzzTeam || null);
+  const scoreA     = useGame(s => s.scores?.A || 0);
+  const scoreB     = useGame(s => s.scores?.B || 0);
+  const bank       = useGame(s => s.bank || 0);
+  const multiplier = useGame(s => s.multiplier || 1);
 
-  const r = rounds[currentRoundIndex] || { q: "Waiting for host to load a round...", answers: [] };
+  // ---------- SFX: detect changes ----------
+  const prev = useRef({ strikesA, strikesB, buzzTeam, revealedCount: 0, scoreA, scoreB, bank });
+  useEffect(() => {
+    // reveal detection = count of revealed answers
+    const revealedCount = (answers || []).filter(a => a?.revealed).length;
+
+    const p = prev.current;
+
+    // Buzz (transition into A/B)
+    if (buzzTeam && buzzTeam !== p.buzzTeam) SFX.play('buzz');
+
+    // Strike added (A or B)
+    if (strikesA > p.strikesA || strikesB > p.strikesB) SFX.play('strike');
+
+    // New reveal(s)
+    if (revealedCount > p.revealedCount) SFX.play('reveal');
+
+    // Award (scores go up & bank goes down)
+    const scoreUp = (scoreA > p.scoreA) || (scoreB > p.scoreB);
+    const bankDown = bank < p.bank;
+    if (scoreUp && bankDown) SFX.play('award');
+
+    prev.current = { strikesA, strikesB, buzzTeam, revealedCount, scoreA, scoreB, bank };
+  }, [answers, buzzTeam, strikesA, strikesB, scoreA, scoreB, bank]);
+
+  // Keyboard safety: allow quick mute/unmute in Studio (M key)
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key.toLowerCase() === 'm') {
+        SFX.setMuted(!SFX.isMuted());
+      }
+      if (e.key === '-' || e.key === '_') SFX.setVolume(Math.max(0, SFX.getVolume() - 0.1));
+      if (e.key === '=' || e.key === '+') SFX.setVolume(Math.min(1, SFX.getVolume() + 0.1));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   return (
-    <div className="studio">
-      <header className="studio-head">
-        <div className="brand">K’MMUNITY KLASH</div>
-        <div className="round-pill">Round x{r.mult || roundMultiplier || 1}</div>
-      </header>
-
-      <main className="board">
-        <h1 className="question" style={{ fontFamily: titleFont }}>{r.q || "Waiting for host to load a round..."}</h1>
-
-        <div className="answers-grid">
-          {Array.from({ length: Math.max(4, r.answers.length || 4) }).map((_, idx) => {
-            const ans = r.answers[idx];
-            const isShown = revealed.includes(idx) && ans;
-            return (
-              <div key={idx} className={`answer-card ${isShown ? "shown" : ""}`}>
-                <div className="slot">{idx + 1}</div>
-                <div className="answer-text">{isShown ? ans.a : ""}</div>
-                <div className="points">{isShown ? ans.p : ""}</div>
-              </div>
-            );
-          })}
+    <div className="studio-root">
+      <div className="studio-stage">
+        <div className="studio-header">
+          <div className="studio-logo">K’MMUNITY KLASH</div>
+          <div className="studio-round-pill">Round ×{multiplier}</div>
         </div>
-      </main>
 
-      <footer className="scorebar">
-        <div className="team">
-          <div className="label">Team A</div>
-          <div className="score">{teamA}</div>
-          <div className="strikes">
-            {[0,1,2].map(i => <span key={i} className={`x ${strikesA>i?"on":""}`}>x</span>)}
+        <div className="studio-question">
+          {title}
+        </div>
+
+        <div className="studio-answers">
+          {(answers || []).map((a, i) => (
+            <div
+              key={i}
+              className={`studio-answer ${a?.revealed ? 'is-revealed' : ''}`}
+            >
+              <div className="studio-answer-index">{i + 1}</div>
+              <div className="studio-answer-text">{a?.revealed ? (a?.text || '') : ''}</div>
+              <div className="studio-answer-points">{a?.revealed ? (a?.points || 0) : ''}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="studio-footer">
+          <div className="studio-team">
+            <div className="studio-team-name">Team A</div>
+            <div className="studio-team-score">{scoreA}</div>
+            <div className="studio-strikes">
+              {[...Array(3)].map((_, k) => (
+                <span key={k} className={`x ${k < strikesA ? 'on' : ''}`}>x</span>
+              ))}
+            </div>
+          </div>
+
+          <div className="studio-bank">
+            <div className="studio-bank-label">Bank</div>
+            <div className="studio-bank-value">{bank}</div>
+          </div>
+
+          <div className="studio-team">
+            <div className="studio-team-name">Team B</div>
+            <div className="studio-team-score">{scoreB}</div>
+            <div className="studio-strikes">
+              {[...Array(3)].map((_, k) => (
+                <span key={k} className={`x ${k < strikesB ? 'on' : ''}`}>x</span>
+              ))}
+            </div>
           </div>
         </div>
 
-        <div className="bank">
-          <div className="label">Bank</div>
-          <div className="score">{bank}</div>
-        </div>
-
-        <div className="team">
-          <div className="label">Team B</div>
-          <div className="score">{teamB}</div>
-          <div className="strikes">
-            {[0,1,2].map(i => <span key={i} className={`x ${strikesB>i?"on":""}`}>x</span>)}
+        {buzzTeam && (
+          <div className={`studio-buzz-banner team-${buzzTeam}`}>
+            BUZZ! Team {buzzTeam}
           </div>
-        </div>
-      </footer>
-
-      {buzz && <div className={`buzz-ribbon ${buzz==="A"?"left":"right"}`}>BUZZ! Team {buzz}</div>}
+        )}
+      </div>
     </div>
   );
 }
