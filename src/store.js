@@ -1,11 +1,40 @@
 import { create } from "zustand";
 import { persist, createJSONStorage } from "zustand/middleware";
 
-// Simple cross-tab sync: BroadcastChannel if available, else "storage" events
-const bc = typeof window !== "undefined" && "BroadcastChannel" in window
-  ? new BroadcastChannel("kk-game")
-  : null;
+// ---------- Cross-tab channel ----------
+const bc =
+  typeof window !== "undefined" && "BroadcastChannel" in window
+    ? new BroadcastChannel("kk-game")
+    : null;
 
+// ---------- Serializable state helpers ----------
+const SERIAL_KEYS = [
+  "title",
+  "titleFont",
+  "hostMode",
+  "round",
+  "roundBank",
+  "buzzingTeam",
+  "teamA",
+  "teamB",
+  "sheetId",
+];
+
+const snapshotFrom = (s) => {
+  const snap = {};
+  for (const k of SERIAL_KEYS) snap[k] = s[k];
+  return snap;
+};
+
+const pushOut = (state) => {
+  try {
+    if (bc) bc.postMessage({ type: "sync", payload: snapshotFrom(state) });
+  } catch {
+    // ignore cloning errors silently
+  }
+};
+
+// ---------- Defaults ----------
 const initialRound = {
   question: "",
   multiplier: 1,
@@ -18,163 +47,194 @@ const initialState = {
   hostMode: true,
 
   round: initialRound,
-  roundBank: 0,         // sum of revealed answer points
-  buzzingTeam: null,    // "A" | "B" | null
+  roundBank: 0,
+  buzzingTeam: null,
 
   teamA: { name: "Team A", score: 0, strikes: 0 },
   teamB: { name: "Team B", score: 0, strikes: 0 },
 
-  sheetId: localStorage.getItem("sheetId") || "",
+  sheetId:
+    (typeof window !== "undefined" && localStorage.getItem("sheetId")) || "",
 };
 
+// ---------- Utils ----------
 const recalcBank = (round) =>
   (round?.answers || [])
-    .filter(a => a.revealed)
+    .filter((a) => a.revealed)
     .reduce((sum, a) => sum + (Number(a.points) || 0), 0);
 
-const pushOut = (state) => {
-  if (bc) bc.postMessage({ type: "sync", payload: state });
-};
-
+// ---------- Store ----------
 export const useGame = create(
   persist(
     (set, get) => ({
       ...initialState,
 
-      // ----- setters -----
-      setTitle: (title) => set((s) => {
-        const ns = { ...s, title };
-        pushOut(ns);
-        return ns;
-      }),
-      setTitleFont: (titleFont) => set((s) => {
-        const ns = { ...s, titleFont };
-        pushOut(ns);
-        return ns;
-      }),
+      // Title / font
+      setTitle: (title) =>
+        set((s) => {
+          const base = snapshotFrom(s);
+          const ns = { ...base, title };
+          pushOut(ns);
+          return ns;
+        }),
+      setTitleFont: (titleFont) =>
+        set((s) => {
+          const base = snapshotFrom(s);
+          const ns = { ...base, titleFont };
+          pushOut(ns);
+          return ns;
+        }),
 
-      setRound: (round) => set((s) => {
-        const clean = {
-          question: round?.question || "",
-          multiplier: Number(round?.multiplier) || 1,
-          answers: (round?.answers || []).map(a => ({
-            text: a.text || "",
-            points: Number(a.points) || 0,
-            revealed: !!a.revealed && !!a.text && Number(a.points) > 0
-          })),
-        };
-        const ns = {
-          ...s,
-          round: clean,
-          roundBank: recalcBank(clean),
-          buzzingTeam: null,
-          teamA: { ...s.teamA, strikes: 0 },
-          teamB: { ...s.teamB, strikes: 0 },
-        };
-        pushOut(ns);
-        return ns;
-      }),
+      // Round load / reveal
+      setRound: (round) =>
+        set((s) => {
+          const base = snapshotFrom(s);
+          const clean = {
+            question: round?.question || "",
+            multiplier: Number(round?.multiplier) || 1,
+            answers: (round?.answers || []).map((a) => ({
+              text: a.text || "",
+              points: Number(a.points) || 0,
+              revealed: !!a.revealed && !!a.text && Number(a.points) > 0,
+            })),
+          };
+          const ns = {
+            ...base,
+            round: clean,
+            roundBank: recalcBank(clean),
+            buzzingTeam: null,
+            teamA: { ...base.teamA, strikes: 0 },
+            teamB: { ...base.teamB, strikes: 0 },
+          };
+          pushOut(ns);
+          return ns;
+        }),
 
-      // Reveal/hide one answer (host 1–8)
-      reveal: (index) => set((s) => {
-        const r = { ...s.round, answers: s.round.answers.map((a, i) =>
-          i === index ? { ...a, revealed: !a.revealed } : a
-        )};
-        const ns = { ...s, round: r, roundBank: recalcBank(r) };
-        pushOut(ns);
-        return ns;
-      }),
+      reveal: (index) =>
+        set((s) => {
+          const base = snapshotFrom(s);
+          const r = {
+            ...base.round,
+            answers: base.round.answers.map((a, i) =>
+              i === index ? { ...a, revealed: !a.revealed } : a
+            ),
+          };
+          const ns = { ...base, round: r, roundBank: recalcBank(r) };
+          pushOut(ns);
+          return ns;
+        }),
 
-      // Buzz control
-      buzz: (team) => set((s) => {
-        const ns = { ...s, buzzingTeam: team === "A" ? "A" : "B" };
-        pushOut(ns);
-        return ns;
-      }),
-      resetBuzz: () => set((s) => {
-        const ns = { ...s, buzzingTeam: null };
-        pushOut(ns);
-        return ns;
-      }),
+      // Buzz
+      buzz: (team) =>
+        set((s) => {
+          const base = snapshotFrom(s);
+          const ns = { ...base, buzzingTeam: team === "B" ? "B" : "A" };
+          pushOut(ns);
+          return ns;
+        }),
+      resetBuzz: () =>
+        set((s) => {
+          const base = snapshotFrom(s);
+          const ns = { ...base, buzzingTeam: null };
+          pushOut(ns);
+          return ns;
+        }),
 
       // Strikes
-      addStrike: (team) => set((s) => {
-        const key = team === "B" ? "teamB" : "teamA";
-        const cur = s[key];
-        const next = Math.min(3, (cur.strikes || 0) + 1);
-        const ns = { ...s, [key]: { ...cur, strikes: next } };
-        pushOut(ns);
-        return ns;
-      }),
-      clearStrikes: () => set((s) => {
-        const ns = {
-          ...s,
-          teamA: { ...s.teamA, strikes: 0 },
-          teamB: { ...s.teamB, strikes: 0 },
-        };
-        pushOut(ns);
-        return ns;
-      }),
+      addStrike: (team) =>
+        set((s) => {
+          const base = snapshotFrom(s);
+          const key = team === "B" ? "teamB" : "teamA";
+          const cur = base[key];
+          const next = Math.min(3, (cur.strikes || 0) + 1);
+          const ns = { ...base, [key]: { ...cur, strikes: next } };
+          pushOut(ns);
+          return ns;
+        }),
+      clearStrikes: () =>
+        set((s) => {
+          const base = snapshotFrom(s);
+          const ns = {
+            ...base,
+            teamA: { ...base.teamA, strikes: 0 },
+            teamB: { ...base.teamB, strikes: 0 },
+          };
+          pushOut(ns);
+          return ns;
+        }),
 
-      // Bank award (this was the main issue)
-      awardRound: (team) => set((s) => {
-        const bank = Number(s.roundBank) || 0;
-        const mult = Number(s.round?.multiplier) || 1;
-        const delta = bank * mult;
+      // Award
+      awardRound: (team) =>
+        set((s) => {
+          const base = snapshotFrom(s);
+          const bank = Number(base.roundBank) || 0;
+          const mult = Number(base.round?.multiplier) || 1;
+          const delta = bank * mult;
 
-        const key = team === "B" ? "teamB" : "teamA";
-        const cur = s[key];
+          const key = team === "B" ? "teamB" : "teamA";
+          const cur = base[key];
 
-        const ns = {
-          ...s,
-          [key]: { ...cur, score: (Number(cur.score) || 0) + delta },
-          roundBank: 0,
-          buzzingTeam: null,
-          teamA: { ...s.teamA, strikes: 0 },
-          teamB: { ...s.teamB, strikes: 0 },
-        };
-        pushOut(ns);
-        return ns;
-      }),
+          const ns = {
+            ...base,
+            [key]: { ...cur, score: (Number(cur.score) || 0) + delta },
+            roundBank: 0,
+            buzzingTeam: null,
+            teamA: { ...base.teamA, strikes: 0 },
+            teamB: { ...base.teamB, strikes: 0 },
+          };
+          pushOut(ns);
+          return ns;
+        }),
 
       // Scores/tools
-      resetScores: () => set((s) => {
-        const ns = {
-          ...s,
-          teamA: { ...s.teamA, score: 0, strikes: 0 },
-          teamB: { ...s.teamB, score: 0, strikes: 0 },
-          roundBank: recalcBank(s.round),
-          buzzingTeam: null,
-        };
-        pushOut(ns);
-        return ns;
-      }),
+      resetScores: () =>
+        set((s) => {
+          const base = snapshotFrom(s);
+          const ns = {
+            ...base,
+            teamA: { ...base.teamA, score: 0, strikes: 0 },
+            teamB: { ...base.teamB, score: 0, strikes: 0 },
+            roundBank: recalcBank(base.round),
+            buzzingTeam: null,
+          };
+          pushOut(ns);
+          return ns;
+        }),
     }),
     {
       name: "kk-game-v1",
       storage: createJSONStorage(() => localStorage),
-      partialize: (s) => s, // persist everything
+      // Persist ONLY the serializable snapshot
+      partialize: (s) => snapshotFrom(s),
     }
   )
 );
 
-// Listen to BroadcastChannel
+// ---------- Incoming sync ----------
 if (bc) {
   bc.onmessage = (ev) => {
     if (ev?.data?.type === "sync" && ev.data.payload) {
-      // hydrate store with incoming state snapshot
-      const next = ev.data.payload;
-      useGame.setState(next, false, "bc-sync");
+      const payload = ev.data.payload;
+      useGame.setState(
+        (prev) => ({ ...prev, ...payload }),
+        false,
+        "bc-sync"
+      );
     }
   };
 }
 
-// Also listen to storage events (fallback)
+// Fallback sync for other tabs
 if (typeof window !== "undefined") {
   window.addEventListener("storage", (e) => {
     if (e.key === "kk-game-v1") {
-      const data = JSON.parse(e.newValue || "{}")?.state;
-      if (data) useGame.setState(data, false, "storage-sync");
+      try {
+        const parsed = JSON.parse(e.newValue || "{}");
+        const data = parsed?.state;
+        if (data) useGame.setState((prev) => ({ ...prev, ...data }), false, "storage-sync");
+      } catch {
+        // ignore
+      }
     }
   });
 }
