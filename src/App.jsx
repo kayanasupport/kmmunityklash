@@ -1,21 +1,21 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { actions, useGame } from "./store";
 import sfx from "./sfx";
 import "./styles.css";
-import { parseCsvText, fetchCsvText } from "./utils/sheet";
+import { fetchCsvText } from "./utils/sheet";
 
 function AnswerTile({ index, answer, revealed, onToggle }) {
+  const text = answer?.text ?? "";
+  const pts = Number(answer?.points ?? 0);
   return (
     <button
       className={`kk-answer ${revealed ? "revealed" : ""}`}
       onClick={() => onToggle(index)}
-      title={`Toggle #${index + 1} (${answer?.points ?? 0} pts)`}
+      title={`Toggle #${index + 1} (${pts} pts)`}
     >
       <div className="kk-answer-left">{index + 1}</div>
-      <div className="kk-answer-center">
-        {revealed ? (answer?.text || "\u00A0") : "\u00A0"}
-      </div>
-      <div className="kk-answer-right">{revealed ? answer?.points ?? 0 : "\u00A0"}</div>
+      <div className="kk-answer-center">{revealed ? (text || "\u00A0") : "\u00A0"}</div>
+      <div className="kk-answer-right">{revealed ? pts : "\u00A0"}</div>
     </button>
   );
 }
@@ -29,46 +29,57 @@ function ScoreBoard() {
     <div className="kk-scoreboard">
       <div className={`kk-team kk-team-a ${buzz === "A" ? "buzzing" : ""}`}>
         <div className="kk-team-name">Team A</div>
-        <div className="kk-team-score">{teamA.score}</div>
-        <div className="kk-strikes">{Array.from({ length: teamA.strikes }).map((_, i) => <span key={i} className="kk-strike-dot" />)}</div>
+        <div className="kk-team-score">{teamA?.score ?? 0}</div>
+        <div className="kk-strikes">
+          {Array.from({ length: Math.min(3, teamA?.strikes ?? 0) }).map((_, i) => (
+            <span key={i} className="kk-strike-dot" />
+          ))}
+        </div>
       </div>
       <div className="kk-bank">
         <div className="kk-bank-label">Bank</div>
-        <div className="kk-bank-score">{bank}</div>
+        <div className="kk-bank-score">{bank ?? 0}</div>
       </div>
       <div className={`kk-team kk-team-b ${buzz === "B" ? "buzzing" : ""}`}>
         <div className="kk-team-name">Team B</div>
-        <div className="kk-team-score">{teamB.score}</div>
-        <div className="kk-strikes">{Array.from({ length: teamB.strikes }).map((_, i) => <span key={i} className="kk-strike-dot" />)}</div>
+        <div className="kk-team-score">{teamB?.score ?? 0}</div>
+        <div className="kk-strikes">
+          {Array.from({ length: Math.min(3, teamB?.strikes ?? 0) }).map((_, i) => (
+            <span key={i} className="kk-strike-dot" />
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
 function RoundBoard() {
-  const rounds = useGame((s) => s.rounds);
+  const rounds = useGame((s) => s.rounds) || [];
   const idx = useGame((s) => s.selectedRoundIndex);
-  const revealed = useGame((s) => s.revealed);
-  const round = rounds[idx] || null;
+  const revealed = useGame((s) => s.revealed) || Array(8).fill(false);
+  const round = (idx != null && rounds[idx]) ? rounds[idx] : null;
 
-  const answerList = Array.from({ length: 8 }).map((_, i) => round?.answers?.[i] || { text: "", points: 0 });
+  const answerList = Array.from({ length: 8 }).map((_, i) =>
+    round?.answers?.[i] ? round.answers[i] : { text: "", points: 0 }
+  );
 
   const toggle = (i) => {
     if (revealed[i]) {
       actions.hide(i);
     } else {
       actions.reveal(i);
+      sfx.safePlay(() => sfx.reveal.play());
     }
   };
 
   return (
     <div className="kk-round-board">
       <div className="kk-question" title={round?.question || ""}>
-        {round ? round.question : "Load a CSV and pick a round"}
+        {round ? (round.question || "—") : "Load a CSV and pick a round"}
       </div>
       <div className="kk-answers-grid">
         {answerList.map((ans, i) => (
-          <AnswerTile key={i} index={i} answer={ans} revealed={revealed[i]} onToggle={toggle} />
+          <AnswerTile key={i} index={i} answer={ans} revealed={!!revealed[i]} onToggle={toggle} />
         ))}
       </div>
     </div>
@@ -78,11 +89,11 @@ function RoundBoard() {
 function Controls() {
   const [url, setUrl] = useState("");
   const fileRef = useRef(null);
-  const title = useGame((s) => s.title);
-  const font = useGame((s) => s.font);
-  const rounds = useGame((s) => s.rounds);
+  const title = useGame((s) => s.title) ?? "K’mmunity Klash";
+  const font = useGame((s) => s.font) ?? "Bangers";
+  const rounds = useGame((s) => s.rounds) ?? [];
   const selectedRoundIndex = useGame((s) => s.selectedRoundIndex);
-  const roundMultiplier = useGame((s) => s.roundMultiplier);
+  const roundMultiplier = useGame((s) => s.roundMultiplier) ?? 1;
 
   const onFile = async (e) => {
     const f = e.target.files?.[0];
@@ -97,7 +108,7 @@ function Controls() {
       const csv = await fetchCsvText(url.trim());
       actions.loadCsv(csv);
     } catch (e) {
-      alert("Failed to load CSV from URL. Make sure it's a direct CSV link (e.g. Google Sheet 'Publish to web' as CSV).");
+      alert("Failed to load CSV from URL. Make sure it's a direct CSV link (e.g. Google Sheet → Publish to web → CSV).");
     }
   };
 
@@ -141,6 +152,9 @@ function Controls() {
           </div>
           <div className="kk-help">Google Sheets: File → Share → Publish to web → CSV</div>
         </div>
+        <div className="kk-field">
+          <a className="kk-btn" href="/studio" target="_blank" rel="noreferrer">Open Studio View (share this tab)</a>
+        </div>
       </div>
 
       <div className="kk-panel">
@@ -153,9 +167,13 @@ function Controls() {
             onChange={(e) => actions.setSelectedRound(Number(e.target.value))}
           >
             <option value="" disabled>Select a round</option>
-            {rounds.map((r, i) => (
-              <option key={i} value={i}>{`#${i + 1} — x${r.round} — ${r.question.slice(0, 60)}`}</option>
-            ))}
+            {rounds.map((r, i) => {
+              const q = (r?.question ?? "").slice(0, 60); // SAFE: never crashes
+              const mult = r?.round ?? 1;
+              return (
+                <option key={i} value={i}>{`#${i + 1} — x${mult} — ${q}`}</option>
+              );
+            })}
           </select>
         </div>
         <div className="kk-field">
@@ -209,20 +227,8 @@ function Controls() {
           </button>
         </div>
         <div className="kk-actions-row">
-          <button
-            className="kk-btn buzz"
-            onClick={() => { actions.buzz("A"); sfx.safePlay(() => sfx.buzz.play()); }}
-            title="A"
-          >
-            Buzz A
-          </button>
-          <button
-            className="kk-btn buzz"
-            onClick={() => { actions.buzz("B"); sfx.safePlay(() => sfx.buzz.play()); }}
-            title="B"
-          >
-            Buzz B
-          </button>
+          <button className="kk-btn buzz" onClick={() => { actions.buzz("A"); sfx.safePlay(() => sfx.buzz.play()); }} title="A">Buzz A</button>
+          <button className="kk-btn buzz" onClick={() => { actions.buzz("B"); sfx.safePlay(() => sfx.buzz.play()); }} title="B">Buzz B</button>
           <button className="kk-btn" onClick={() => actions.resetBuzz()} title="R">Reset Buzz</button>
         </div>
       </div>
@@ -242,8 +248,8 @@ function Controls() {
 }
 
 export default function App() {
-  const font = useGame((s) => s.font);
-  const revealed = useGame((s) => s.revealed);
+  const font = useGame((s) => s.font) ?? "Bangers";
+  const revealed = useGame((s) => s.revealed) ?? Array(8).fill(false);
 
   // Keyboard handlers on Host only (this tab).
   useEffect(() => {
