@@ -20,15 +20,16 @@ const defaultState = {
   selectedRoundIndex: null,
   roundMultiplier: 1,
   revealed: Array(8).fill(false),
-  // Tracks when each tile was revealed (epoch counter), -1 = never (or prior epoch)
+  // epoch-based banking so award->0 sticks until new reveals
   revealedEpochs: Array(8).fill(-1),
   bankEpoch: 0,
   bank: 0,
   teamA: { score: 0, strikes: 0 },
   teamB: { score: 0, strikes: 0 },
   buzz: null,
-  // Used to flash a big X in Studio
-  strikeFlash: null, // { team: 'A'|'B', id: number }
+  strikeFlash: null, // { team:'A'|'B', id:number }
+  // NEW: studio SFX driver (Studio listens to this and plays sounds)
+  lastEvent: null, // { type:'reveal'|'strike'|'buzz'|'award', id:number, meta?:any }
 };
 
 function loadState() {
@@ -39,8 +40,12 @@ function loadState() {
       return {
         ...defaultState,
         ...parsed,
-        revealed: Array.isArray(parsed?.revealed) ? parsed.revealed.slice(0, 8).concat(Array(8).fill(false)).slice(0, 8) : Array(8).fill(false),
-        revealedEpochs: Array.isArray(parsed?.revealedEpochs) ? parsed.revealedEpochs.slice(0, 8).concat(Array(8).fill(-1)).slice(0, 8) : Array(8).fill(-1),
+        revealed: Array.isArray(parsed?.revealed)
+          ? parsed.revealed.slice(0, 8).concat(Array(8).fill(false)).slice(0, 8)
+          : Array(8).fill(false),
+        revealedEpochs: Array.isArray(parsed?.revealedEpochs)
+          ? parsed.revealedEpochs.slice(0, 8).concat(Array(8).fill(-1)).slice(0, 8)
+          : Array(8).fill(-1),
       };
     }
   } catch {}
@@ -119,6 +124,7 @@ function resetForRoundChange(newIndex) {
     teamB: { ...state.teamB, strikes: 0 },
     buzz: null,
     strikeFlash: null,
+    lastEvent: null,
   });
 }
 
@@ -151,6 +157,7 @@ export const actions = {
       teamB: { score: 0, strikes: 0 },
       buzz: null,
       strikeFlash: null,
+      lastEvent: null,
     };
     persistAndBroadcast();
   },
@@ -167,9 +174,10 @@ export const actions = {
     const arr = state.revealed.slice();
     arr[i] = true;
     const epochs = state.revealedEpochs.slice();
-    epochs[i] = state.bankEpoch; // mark as counted for current bank epoch
+    epochs[i] = state.bankEpoch;
     const next = { ...state, revealed: arr, revealedEpochs: epochs };
     next.bank = computeBankFromEpoch(next);
+    next.lastEvent = { type: "reveal", id: Date.now(), meta: { i } };
     state = next;
     persistAndBroadcast();
   },
@@ -191,13 +199,12 @@ export const actions = {
   award(team) {
     const t = team === "A" ? "teamA" : "teamB";
     const score = (state[t].score || 0) + (state.bank || 0);
-    // Reset bank and advance epoch so current reveals are not auto-counted anymore
     state = {
       ...state,
       [t]: { ...state[t], score },
       bank: 0,
-      bankEpoch: state.bankEpoch + 1,
-      // keep revealed as-is for visuals; tiles revealed before do NOT count in the new epoch
+      bankEpoch: state.bankEpoch + 1, // start new epoch so old reveals don't add back
+      lastEvent: { type: "award", id: Date.now(), meta: { team } },
     };
     persistAndBroadcast();
   },
@@ -205,9 +212,13 @@ export const actions = {
     const t = team === "A" ? "teamA" : "teamB";
     const strikes = Math.min(3, (state[t].strikes || 0) + 1);
     const flash = { team: team === "A" ? "A" : "B", id: Date.now() };
-    state = { ...state, [t]: { ...state[t], strikes }, strikeFlash: flash };
+    state = {
+      ...state,
+      [t]: { ...state[t], strikes },
+      strikeFlash: flash,
+      lastEvent: { type: "strike", id: flash.id, meta: { team } },
+    };
     persistAndBroadcast();
-    // Auto-clear flash shortly so Studio hides the overlay
     setTimeout(() => {
       state = { ...state, strikeFlash: null };
       persistAndBroadcast();
@@ -220,7 +231,10 @@ export const actions = {
     });
   },
   buzz(team) {
-    setState({ buzz: team === "A" ? "A" : "B" });
+    setState({
+      buzz: team === "A" ? "A" : "B",
+      lastEvent: { type: "buzz", id: Date.now(), meta: { team } },
+    });
   },
   resetBuzz() {
     setState({ buzz: null });

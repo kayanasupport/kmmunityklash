@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo } from "react";
 import { actions, useGame } from "./store";
-import sfx from "./sfx";
 import "./styles.css";
 import { fetchCsvText } from "./utils/sheet";
 
@@ -62,7 +61,6 @@ function RoundBoard() {
   const revealed = useGame((s) => s.revealed) || Array(8).fill(false);
   const round = (idx != null && rounds[idx]) ? rounds[idx] : null;
 
-  // Only show answers that have text AND points > 0 (hide empty/zero rows)
   const visible = useMemo(() => {
     const ans = round?.answers || [];
     return ans
@@ -71,12 +69,8 @@ function RoundBoard() {
   }, [round]);
 
   const onToggle = (origIndex) => {
-    if (revealed[origIndex]) {
-      actions.hide(origIndex);
-    } else {
-      actions.reveal(origIndex);
-      sfx.safePlay(() => sfx.reveal.play());
-    }
+    if (revealed[origIndex]) actions.hide(origIndex);
+    else actions.reveal(origIndex);
   };
 
   return (
@@ -121,7 +115,7 @@ function Controls() {
     try {
       const csv = await fetchCsvText(url.trim());
       actions.loadCsv(csv);
-    } catch (e) {
+    } catch {
       alert("Failed to load CSV from URL. Make sure it's a direct CSV link (e.g. Google Sheet → Publish to web → CSV).");
     }
   };
@@ -208,42 +202,18 @@ function Controls() {
 
       <div className="kk-panel">
         <h3>Award / Buzz / Strikes</h3>
-        <div className="kk-actions-row">
-          <button
-            className="kk-btn primary"
-            onClick={() => { actions.award("A"); sfx.safePlay(() => sfx.award.play()); }}
-            title="W"
-          >
-            Award → Team A
-          </button>
-          <button
-            className="kk-btn primary"
-            onClick={() => { actions.award("B"); sfx.safePlay(() => sfx.award.play()); }}
-            title="E"
-          >
-            Award → Team B
-          </button>
+        <div className="kk-actions-row wrap">
+          <button className="kk-btn primary" onClick={() => actions.award("A")} title="W">Award → Team A</button>
+          <button className="kk-btn primary" onClick={() => actions.award("B")} title="E">Award → Team B</button>
         </div>
-        <div className="kk-actions-row">
-          <button
-            className="kk-btn warn"
-            onClick={() => { actions.strike("A"); sfx.safePlay(() => sfx.strike.play()); }}
-            title="S"
-          >
-            + Strike A
-          </button>
-          <button
-            className="kk-btn warn"
-            onClick={() => { actions.strike("B"); sfx.safePlay(() => sfx.strike.play()); }}
-            title="D"
-          >
-            + Strike B
-          </button>
-          <button className="kk-btn" onClick={() => actions.clearStrikes()} title="">Clear</button>
+        <div className="kk-actions-row wrap">
+          <button className="kk-btn warn" onClick={() => actions.strike("A")} title="S">+ Strike A</button>
+          <button className="kk-btn warn" onClick={() => actions.strike("B")} title="D">+ Strike B</button>
+          <button className="kk-btn" onClick={() => actions.clearStrikes()}>Clear</button>
         </div>
-        <div className="kk-actions-row">
-          <button className="kk-btn buzz" onClick={() => { actions.buzz("A"); sfx.safePlay(() => sfx.buzz.play()); }} title="A">Buzz A</button>
-          <button className="kk-btn buzz" onClick={() => { actions.buzz("B"); sfx.safePlay(() => sfx.buzz.play()); }} title="B">Buzz B</button>
+        <div className="kk-actions-row wrap">
+          <button className="kk-btn buzz" onClick={() => actions.buzz("A")} title="A">Buzz A</button>
+          <button className="kk-btn buzz" onClick={() => actions.buzz("B")} title="B">Buzz B</button>
           <button className="kk-btn" onClick={() => actions.resetBuzz()} title="R">Reset Buzz</button>
         </div>
       </div>
@@ -268,43 +238,23 @@ export default function App() {
   const rounds = useGame((s) => s.rounds) ?? [];
   const selectedRoundIndex = useGame((s) => s.selectedRoundIndex);
 
-  // Keyboard handlers on Host only (this tab).
   useEffect(() => {
     const onKey = (e) => {
       const k = e.key.toLowerCase();
       if (k >= "1" && k <= "8") {
         const idx = Number(k) - 1;
-        // Only reveal/hide if that answer exists (non-empty / non-zero)
         const round = rounds[selectedRoundIndex] || null;
         const ans = round?.answers?.[idx];
         if (!ans || !(ans.text || "").trim() || !(Number(ans.points) > 0)) return;
-        if (revealed[idx]) {
-          actions.hide(idx);
-        } else {
-          actions.reveal(idx);
-          sfx.safePlay(() => sfx.reveal.play());
-        }
-      } else if (k === "a") {
-        actions.buzz("A");
-        sfx.safePlay(() => sfx.buzz.play());
-      } else if (k === "b") {
-        actions.buzz("B");
-        sfx.safePlay(() => sfx.buzz.play());
-      } else if (k === "r") {
-        actions.resetBuzz();
-      } else if (k === "s") {
-        actions.strike("A");
-        sfx.safePlay(() => sfx.strike.play());
-      } else if (k === "d") {
-        actions.strike("B");
-        sfx.safePlay(() => sfx.strike.play());
-      } else if (k === "w") {
-        actions.award("A");
-        sfx.safePlay(() => sfx.award.play());
-      } else if (k === "e") {
-        actions.award("B");
-        sfx.safePlay(() => sfx.award.play());
-      }
+        if (revealed[idx]) actions.hide(idx);
+        else actions.reveal(idx);
+      } else if (k === "a") actions.buzz("A");
+      else if (k === "b") actions.buzz("B");
+      else if (k === "r") actions.resetBuzz();
+      else if (k === "s") actions.strike("A");
+      else if (k === "d") actions.strike("B");
+      else if (k === "w") actions.award("A");
+      else if (k === "e") actions.award("B");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

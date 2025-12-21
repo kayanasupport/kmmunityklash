@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useGame } from "./store";
+import sfx from "./sfx";
 import "./styles.css";
 
 function StrikeXs({ count }) {
@@ -35,8 +36,8 @@ export default function Studio() {
   const bank = useGame((s) => s.bank);
   const buzz = useGame((s) => s.buzz);
   const strikeFlash = useGame((s) => s.strikeFlash);
+  const lastEvent = useGame((s) => s.lastEvent);
 
-  // Filter visible answers for studio as well (hide empty/zero)
   const visible = useMemo(() => {
     const ans = round?.answers || [];
     return ans
@@ -44,7 +45,20 @@ export default function Studio() {
       .filter(({ a }) => (a?.text || "").trim().length > 0 && Number(a?.points || 0) > 0);
   }, [round]);
 
-  // local flag to animate show/hide on flash id change
+  // Play SFX on Studio when events arrive
+  useEffect(() => {
+    if (!lastEvent?.id) return;
+    if (lastEvent.type === "reveal") {
+      sfx.safePlay(() => sfx.reveal.play());
+    } else if (lastEvent.type === "strike") {
+      sfx.safePlay(() => sfx.strike.play());
+    } else if (lastEvent.type === "buzz") {
+      sfx.safePlay(() => sfx.buzz.play());
+    } else if (lastEvent.type === "award") {
+      sfx.safePlay(() => sfx.award.play());
+    }
+  }, [lastEvent?.id]);
+
   const [flashId, setFlashId] = useState(null);
   useEffect(() => {
     if (strikeFlash?.id) {
