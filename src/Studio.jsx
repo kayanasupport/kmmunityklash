@@ -2,75 +2,63 @@ import React from "react";
 import { useGame } from "./store";
 import "./styles.css";
 
-function StudioAnswer({ idx, a }) {
-  return (
-    <div className={`studioAnswer ${a.revealed ? "on" : ""}`}>
-      <div className="left">
-        <div className="pill">{idx + 1}</div>
-        <div className="txt">{a.revealed ? a.text : ""}</div>
-      </div>
-      <div className="pts">{a.revealed ? a.points : ""}</div>
-    </div>
-  );
-}
-
 export default function Studio() {
-  const title = useGame((s) => s.title);
-  const round = useGame((s) => s.round);
-  const teamA = useGame((s) => s.teamA);
-  const teamB = useGame((s) => s.teamB);
-  const bank = useGame((s) => s.roundBank);
-  const buzzingTeam = useGame((s) => s.buzzingTeam);
+  const {
+    title, titleFont, rounds, currentRoundIndex, revealed,
+    teamA, teamB, strikesA, strikesB, bank, buzz, roundMultiplier
+  } = useGame();
+
+  const r = rounds[currentRoundIndex] || { q: "Waiting for host to load a round...", answers: [] };
 
   return (
-    <div className="studioWrap">
-      <header className="studioHeader">
-        <div className="badge">KK</div>
-        <div className="title studio">{title}</div>
-        <div className="roundTag">Round x{round?.multiplier || 1}</div>
+    <div className="studio">
+      <header className="studio-head">
+        <div className="brand">K’MMUNITY KLASH</div>
+        <div className="round-pill">Round x{r.mult || roundMultiplier || 1}</div>
       </header>
 
-      <div className="studioBoard">
-        <div className={`studioQuestion ${buzzingTeam ? "buzz" : ""}`}>
-          {round?.question || "WAITING FOR HOST TO LOAD A ROUND…"}
+      <main className="board">
+        <h1 className="question" style={{ fontFamily: titleFont }}>{r.q || "Waiting for host to load a round..."}</h1>
+
+        <div className="answers-grid">
+          {Array.from({ length: Math.max(4, r.answers.length || 4) }).map((_, idx) => {
+            const ans = r.answers[idx];
+            const isShown = revealed.includes(idx) && ans;
+            return (
+              <div key={idx} className={`answer-card ${isShown ? "shown" : ""}`}>
+                <div className="slot">{idx + 1}</div>
+                <div className="answer-text">{isShown ? ans.a : ""}</div>
+                <div className="points">{isShown ? ans.p : ""}</div>
+              </div>
+            );
+          })}
         </div>
+      </main>
 
-        <div className="studioGrid">
-          {(round?.answers || []).map((a, i) => (
-            <StudioAnswer key={i} idx={i} a={a} />
-          ))}
-        </div>
-
-        <div className="studioFooter">
-          <div className="teamCard">
-            <div className="teamName">{teamA.name}</div>
-            <div className="teamScore">{teamA.score || 0}</div>
-            <div className="strikeRow">
-              {[...Array(3)].map((_, i) => (
-                <span key={i} className={`strikeDot ${teamA.strikes > i ? "on" : ""}`}>
-                  X
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <div className="bankCard">
-            Bank <span className="mono">{bank}</span>
-          </div>
-
-          <div className="teamCard">
-            <div className="teamName">{teamB.name}</div>
-            <div className="teamScore">{teamB.score || 0}</div>
-            <div className="strikeRow">
-              {[...Array(3)].map((_, i) => (
-                <span key={i} className={`strikeDot ${teamB.strikes > i ? "on" : ""}`}>
-                  X
-                </span>
-              ))}
-            </div>
+      <footer className="scorebar">
+        <div className="team">
+          <div className="label">Team A</div>
+          <div className="score">{teamA}</div>
+          <div className="strikes">
+            {[0,1,2].map(i => <span key={i} className={`x ${strikesA>i?"on":""}`}>x</span>)}
           </div>
         </div>
-      </div>
+
+        <div className="bank">
+          <div className="label">Bank</div>
+          <div className="score">{bank}</div>
+        </div>
+
+        <div className="team">
+          <div className="label">Team B</div>
+          <div className="score">{teamB}</div>
+          <div className="strikes">
+            {[0,1,2].map(i => <span key={i} className={`x ${strikesB>i?"on":""}`}>x</span>)}
+          </div>
+        </div>
+      </footer>
+
+      {buzz && <div className={`buzz-ribbon ${buzz==="A"?"left":"right"}`}>BUZZ! Team {buzz}</div>}
     </div>
   );
 }
